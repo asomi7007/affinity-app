@@ -1,4 +1,130 @@
-az bicep build --file infra/azure/main.bicep --outdir infra/azure
-git add infra/azure/main.json
-git commit -m "chore: add compiled ARM template"
-git push
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.37.4.10188",
+      "templateHash": "181508015874193899"
+    }
+  },
+  "parameters": {
+    "projectName": {
+      "type": "string",
+      "defaultValue": "affinity",
+      "metadata": {
+        "description": "프로젝트 이름 (리소스 접두사)"
+      }
+    },
+    "enableRandomSuffix": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "리소스 이름 뒤에 자동으로 붙는 4자리 랜덤(고정) suffix 사용 여부"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "배포 위치"
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "metadata": {
+        "description": "컨테이너 이미지 (예: ghcr.io/owner/affinity-app:latest)"
+      }
+    },
+    "containerPort": {
+      "type": "int",
+      "defaultValue": 8000,
+      "metadata": {
+        "description": "컨테이너 포트 (프론트엔드 리버스프록시 포함 시 8000 또는 80)"
+      }
+    },
+    "planSku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "metadata": {
+        "description": "SKU (Basic B1, 무료 플랜은 Linux 컨테이너에 제한)"
+      }
+    },
+    "planCapacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "App Service 계획 용량 (기본 1)"
+      }
+    }
+  },
+  "variables": {
+    "rawSuffix": "[substring(uniqueString(resourceGroup().id, parameters('projectName')), 0, 4)]",
+    "suffix": "[toLower(variables('rawSuffix'))]",
+    "nameSuffix": "[if(parameters('enableRandomSuffix'), format('-{0}', variables('suffix')), '')]",
+    "planName": "[format('{0}-plan{1}', parameters('projectName'), variables('nameSuffix'))]",
+    "webAppName": "[format('{0}-app{1}', parameters('projectName'), variables('nameSuffix'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2023-12-01",
+      "name": "[variables('planName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('planSku')]",
+        "capacity": "[parameters('planCapacity')]",
+        "tier": "[if(equals(parameters('planSku'), 'B1'), 'Basic', 'Standard')]"
+      },
+      "kind": "linux",
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2023-12-01",
+      "name": "[variables('webAppName')]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux",
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]",
+        "siteConfig": {
+          "linuxFxVersion": "[format('DOCKER|{0}', parameters('containerImage'))]",
+          "appCommandLine": "",
+          "alwaysOn": true,
+          "http20Enabled": true,
+          "use32BitWorkerProcess": false,
+          "applicationLogs": {
+            "fileSystem": {
+              "level": "Information",
+              "retentionInMb": 35,
+              "retentionInDays": 5
+            }
+          },
+          "containerRegistryUseManagedIdentity": true,
+          "healthCheckPath": "/docs",
+          "appSettings": [
+            {
+              "name": "WEBSITES_PORT",
+              "value": "[string(parameters('containerPort'))]"
+            }
+          ]
+        },
+        "httpsOnly": true
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "webAppUrl": {
+      "type": "string",
+      "value": "[format('https://{0}.azurewebsites.net', variables('webAppName'))]"
+    }
+  }
+}
