@@ -1,0 +1,225 @@
+# Affinity Diagram Web App
+
+FastAPI + React (Vite) 기반 실시간 어피니티 다이어그램 협업 도구 초기 스켈레톤.
+
+## 구조
+```
+affinity-app/
+  backend/        # FastAPI, WebSocket
+  frontend/       # React Vite TypeScript
+  infra/azure/    # Azure 배포 문서
+  .github/workflows/ci-cd.yml
+```
+
+## 로컬 실행
+```bash
+# Backend
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+# Frontend (새 터미널)
+cd ../frontend
+npm install
+npm run dev
+```
+Backend: http://localhost:8000  (Swagger: /docs)
+Frontend: http://localhost:5173
+WebSocket: ws://localhost:8000/ws/board/dev-board
+
+### 외부 IP / 같은 네트워크 접속
+개발 PC IP가 `192.168.x.x` 라면 다른 단말 브라우저에서:
+
+1. 백엔드 실행 시 `--host 0.0.0.0` 지정
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+2. 프론트 실행(기본 Vite dev 서버 5173 포트 노출)
+```bash
+npm run dev -- --host
+```
+3. 다른 PC에서 접속
+```
+http://192.168.x.x:5173
+```
+자동으로 `http://192.168.x.x:8000` 을 API 베이스로 추론(포트 5173 → 8000 변환)합니다.
+
+프록시/포트가 다르면 환경변수로 직접 지정:
+```bash
+# Windows PowerShell 예시
+$env:VITE_API_BASE="http://192.168.x.x:9000"
+npm run dev
+```
+
+### 환경 변수 정리
+| 이름 | 용도 | 기본값 |
+|------|------|--------|
+| `VITE_API_BASE` | REST & WS 베이스 URL | `window.location.hostname` + 추론 포트(5173→8000) |
+
+### 실시간 동기화 & 버전 정책(LWW)
+- 서버는 보드별 인메모리 상태(`notes`, `gridMode`, `sectionTitles`, `version`) 유지
+- 클라이언트 최초 연결 시 `sync.request` → 서버 `sync.state` 응답
+- 변경 이벤트 발생 시 서버가 version 증가 후 `version` 필드 포함 브로드캐스트
+- 클라이언트는 수신 이벤트 `version <= localVersion` 이면 무시 (LWW: Last Writer Wins)
+- 충돌 가능성 낮은 단순 편집 모델 (동일 노트 동시 편집 시 마지막 수신이 승리)
+
+향후 개선 아이디어:
+- 부분 필드 CRDT(Text) 적용
+- Optimistic Lock (클라이언트가 보낸 baseVersion 불일치 시 재동기화)
+- Redis Pub/Sub or Azure Web PubSub 확장
+
+
+## GitHub Actions
+- 테스트, 프론트 빌드, 컨테이너 이미지(GHCR) 빌드 & 푸시
+- Azure 배포 스텁 (Secrets 필요)
+
+## Azure 원클릭 배포
+
+아래 버튼을 클릭하면 현재 리포지토리의 `infra/azure/main.bicep` 템플릿을 사용하여 Azure App Service (Linux Container)로 배포합니다. GHCR 등 외부 레지스트리에 미리 이미지를 Push 한 후 해당 이미지 경로를 입력해야 합니다.
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2F<YOUR_GITHUB_USER_OR_ORG>%2F<YOUR_REPO_NAME>%2Fmain%2Finfra%2Fazure%2Fmain.json)
+
+### 리소스 이름 충돌 방지 (랜덤 suffix)
+동일한 `projectName` 으로 여러 사람이 같은 구독/리소스그룹에 배포할 경우 이름 충돌을 막기 위해 기본적으로 `-xxxx` 형태(4글자 소문자 hex)의 suffix 가 자동 부여됩니다. (예: `affinity-app-ab12`)
+
+- Bicep 파라미터 `enableRandomSuffix` = true (기본) 시 적용
+- suffix 는 `uniqueString(resourceGroup().id, projectName)` 기반 deterministic 값 → 같은 RG/같은 projectName 재배포 시 동일 이름 유지
+- 완전 재배포마다 다른 임의값(비결정) 원하면 추가 모듈/utcNow() seed 로직 필요 (현재 템플릿은 안정적 재배포 우선)
+
+### 1) Bicep → ARM 템플릿 변환 (CI 또는 수동)
+Azure 포털 Deploy 버튼은 ARM(JSON) URL을 요구하므로 Bicep을 JSON으로 사전 변환해야 합니다. 로컬에서 수동 변환 예:
+```bash
+az bicep build --file infra/azure/main.bicep --outdir infra/azure
+```
+생성된 `main.json` 을 main 브랜치에 커밋 후 위 URL의 `<YOUR_GITHUB_USER_OR_ORG>` / `<YOUR_REPO_NAME>` 를 실제 값으로 교체하십시오.
+
+### 2) 컨테이너 이미지 준비
+GitHub Actions 또는 로컬에서 이미지 태그 예:
+```bash
+# 프론트엔드 빌드 후 (예: Nginx 이미지에 결과 포함) / 또는 백엔드 포함 단일 이미지
+docker build -t ghcr.io/<owner>/<repo>:latest .
+echo $CR_PAT | docker login ghcr.io -u <owner> --password-stdin
+docker push ghcr.io/<owner>/<repo>:latest
+```
+
+### 3) 포털 배포 시 파라미터
+| 파라미터 | 설명 | 예시 |
+|----------|------|------|
+| projectName | 리소스 접두사 | affinity | 
+| location | 배포 지역 | koreacentral |
+| containerImage | 풀 이미지 경로 | ghcr.io/owner/affinity-app:latest |
+| containerPort | 컨테이너 노출 포트 | 8000 (FastAPI) |
+| planSku | App Service 플랜 SKU | B1 |
+
+### 4) GitHub Actions로 자동 변환/배포 (선택)
+`.github/workflows/` 에 아래 스니펫을 추가하면 main push 시 Bicep 빌드 + Azure Deploy (Az CLI) 자동화 가능.
+```yaml
+name: deploy-azure
+on:
+  push:
+    branches: [ main ]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Build Bicep
+        run: |
+          az bicep build --file infra/azure/main.bicep --outdir infra/azure
+      - name: Deploy
+        run: |
+          az deployment group create \
+            --resource-group ${{ secrets.AZURE_RG }} \
+            --template-file infra/azure/main.json \
+            --parameters projectName=affinity containerImage=${{ secrets.CONTAINER_IMAGE }}
+```
+
+필요 Secrets
+| 이름 | 설명 |
+|------|------|
+| `AZURE_CLIENT_ID` | Federated Credential이 연결된 App Registration 클라이언트 ID |
+| `AZURE_TENANT_ID` | Azure AD Tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | 구독 ID |
+| `AZURE_RG` | 리소스 그룹 이름 |
+| `CONTAINER_IMAGE` | 배포할 컨테이너 이미지 (예: ghcr.io/owner/affinity-app:latest) |
+
+### 5) 런타임 환경 변수 / 구성
+App Service에 배포된 컨테이너는 포트 환경을 자동 주입(WEBSITES_PORT) 하지 않는 경우 Bicep에서 지정한 `containerPort` 로 노출됩니다. FastAPI가 8000 포트 실행 중인지 확인하세요. 필요 시 Dockerfile `CMD` 확인.
+
+### 6) 커스텀 도메인 / HTTPS
+배포 후 `webAppUrl` 출력 값을 확인 → App Service 설정에서 커스텀 도메인(CNAME) 추가 및 무료 SSL 바인딩.
+
+### 7) 문제 해결
+| 증상 | 점검 항목 |
+|------|-----------|
+| 앱 502/기동 실패 | Docker 로그: `az webapp log tail -n <app> -g <rg>` |
+| 포트 바인딩 오류 | 컨테이너 내부 프로세스 포트와 `containerPort` 일치 여부 |
+| 이미지 Pull 실패 | Managed Identity ACR 권한/ GHCR public 여부 확인 |
+| Health Check 실패 | Bicep healthCheckPath `/docs` 정상 응답 여부 |
+
+---
+
+
+## 향후 로드맵
+- 노트 이동 이벤트 서버 검증 및 타입 정의 강화
+- Board 영속화 (PostgreSQL + SQLAlchemy/SQLModel)
+- 인증 (JWT 또는 Azure AD)
+- Web PubSub / Redis 확장
+- 그룹화(Cluster) 알고리즘 및 색상 태그
+- 보드 내 검색 / 필터
+
+## Debug & 진단 도구
+실시간 드래그 / 생성 문제를 빠르게 진단하기 위한 런타임 플래그와 패널을 제공합니다.
+
+### 디버그 패널
+프론트 우상단 `Debug ▼` 버튼을 클릭하면 패널이 열립니다.
+
+토글 가능한 옵션:
+- `DEBUG_CREATE`: 포스트잇 생성 시 콘솔에 좌표/DOM Rect 로그
+- `DEBUG_DRAG`: 드래그 시작/라이브 전송/종료 요약 로그
+- `DEBUG_DRAG_VERBOSE`: 매 pointermove 스냅 적용 후 좌표 상세 로그 (소음 多)
+
+패널 하단에는 현재 드래그 전송 정책이 표시됩니다:
+- Throttle 간격: 90ms (최근 좌표 큐 → note.move 브로드캐스트)
+- 주기적 flush: 120ms (사용자 입력 적을 때 잔여 큐 비우기)
+- pointerup 시 최종 flush 보장
+
+### 콘솔 수동 설정
+패널 외에도 브라우저 콘솔에서 직접 설정 가능:
+```js
+window.DEBUG_CREATE = true;      // 생성 로그
+window.DEBUG_DRAG = true;        // 기본 드래그 라이프사이클 로그
+window.DEBUG_DRAG_VERBOSE = true;// 상세 이동 로그 (성능 영향)
+```
+끄기:
+```js
+window.DEBUG_DRAG_VERBOSE = false;
+```
+
+### Hover Outline
+포스트잇 위에 포인터가 올라가면 파란 outline 이 나타나 타깃이 명확히 식별됩니다 (드래그 중 제외). 이는 포인터 이벤트 버블/레이어 문제로 인해 클릭 대상이 어긋나는지 확인할 때 유용합니다.
+
+### 드래그 실시간 전송
+기존: pointerup 시 단발 전송 → 개선: 이동 중 주기적(note.move) 실시간 공유. 느린 네트워크에서도 최종 위치는 pointerup flush 로 정확히 동기화됩니다.
+
+### 문제 재현 팁
+1. Debug Panel 열기 → DRAG / DRAG_VERBOSE 활성
+2. 포스트잇 여러 개 생성 후 겹치거나 근접 배치
+3. 드래그하여 자석(snap) 정렬 동작과 전송 로그 타이밍 비교
+4. 다른 브라우저(또는 시크릿 창)에서 동일한 보드 관찰
+
+### 추가 예정
+- 드래그 경로 히트맵 시각화 옵션
+- Latency 측정(ping) 및 평균 전송량 표시
+- 서버 authoritative 이동 거부 시(향후) 경고 배지
+
+## 라이선스
+- 추후 결정
