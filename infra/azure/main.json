@@ -1,0 +1,4 @@
+az bicep build --file infra/azure/main.bicep --outdir infra/azure
+git add infra/azure/main.json
+git commit -m "chore: add compiled ARM template"
+git push
