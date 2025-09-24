@@ -12,6 +12,20 @@ affinity-app/
 ```
 
 ## 로컬 실행
+
+### 🚀 빠른 시작 (권장)
+```bash
+# 의존성 설치 (최초 실행 시)
+cd backend && pip install -r requirements.txt && cd ..
+cd frontend && npm install && cd ..
+
+# 개발 서버 시작 (백엔드 + 프론트엔드 동시 실행)
+python start_dev.py
+# 또는
+./start_dev.sh
+```
+
+### 📝 수동 실행 (개별 컴포넌트)
 ```bash
 # Backend
 cd backend
@@ -22,9 +36,11 @@ cd ../frontend
 npm install
 npm run dev
 ```
-Backend: http://localhost:8000  (Swagger: /docs)
-Frontend: http://localhost:5173
-WebSocket: ws://localhost:8000/ws/board/dev-board
+
+### 📋 접속 정보
+- Backend: http://localhost:8000  (Swagger: /docs)
+- Frontend: http://localhost:5173
+- WebSocket: ws://localhost:8000/ws/board/dev-board
 
 ### 외부 IP / 같은 네트워크 접속
 개발 PC IP가 `192.168.x.x` 라면 다른 단말 브라우저에서:
