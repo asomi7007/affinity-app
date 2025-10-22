@@ -23,3 +23,11 @@ Thumbs.db
 # Env
 .env
 frontend/.env
+
+# Process IDs
+*.pid
+backend.pid
+frontend.pid
+
+# Backend venv
+backend/venv/

@@ -50,6 +50,14 @@ fi
 
 print_step "Python 의존성 설치 중..."
 cd backend
+
+# 가상환경 활성화 전에 pip 체크
+if [ ! -f "venv/bin/pip" ] || ! venv/bin/python -m pip --version > /dev/null 2>&1; then
+    print_warning "가상환경이 손상되었습니다. 재생성 중..."
+    rm -rf venv
+    python3 -m venv venv
+fi
+
 source venv/bin/activate
 pip install -r requirements.txt > /dev/null 2>&1 || {
     print_warning "pip 설치 실패, --break-system-packages 옵션으로 재시도..."
