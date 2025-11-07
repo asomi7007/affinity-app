@@ -42,6 +42,8 @@ export function useWebSocket(path: string, onMessage: (data: any) => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  const messageQueueRef = useRef<any[]>([]);
+  const isConnectedRef = useRef(false);
   const maxReconnectAttempts = 5;
   const reconnectDelay = 3000; // 3초
 
@@ -62,10 +64,25 @@ export function useWebSocket(path: string, onMessage: (data: any) => void) {
 
         ws.onopen = () => {
           reconnectAttemptsRef.current = 0; // 재연결 카운터 리셋
+          isConnectedRef.current = true;
           if (isDev) console.info('[WS] Connected:', wsUrl);
+          
+          // 큐에 쌓인 메시지 전송
+          if (messageQueueRef.current.length > 0) {
+            if (isDev) console.info(`[WS] Flushing ${messageQueueRef.current.length} queued messages`);
+            messageQueueRef.current.forEach(msg => {
+              try {
+                ws.send(JSON.stringify(msg));
+              } catch (err) {
+                if (isDev) console.warn('[WS] Error sending queued message:', err);
+              }
+            });
+            messageQueueRef.current = [];
+          }
         };
 
         ws.onclose = (e) => {
+          isConnectedRef.current = false;
           if (isDev) console.info('[WS] Closed:', e.code, e.reason);
           
           // 자동 재연결 (개발 모드에서만, 최대 시도 횟수 제한)
@@ -77,6 +94,7 @@ export function useWebSocket(path: string, onMessage: (data: any) => void) {
         };
 
         ws.onerror = (e) => {
+          isConnectedRef.current = false;
           console.error('[WS] Error:', e);
           // GitHub Codespaces에서 포트가 private일 수 있으므로 안내
           if (base.includes('.app.github.dev')) {
@@ -102,6 +120,7 @@ export function useWebSocket(path: string, onMessage: (data: any) => void) {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
+      isConnectedRef.current = false;
       if (wsRef.current) {
         wsRef.current.close();
       }
@@ -111,8 +130,14 @@ export function useWebSocket(path: string, onMessage: (data: any) => void) {
   const send = (data: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
+    } else if (isConnectedRef.current === false && wsRef.current && wsRef.current.readyState === WebSocket.CONNECTING) {
+      // Connection is still establishing, queue the message
+      messageQueueRef.current.push(data);
+      const isDev = import.meta.env.DEV;
+      if (isDev) console.info('[WS] Message queued (connecting):', data.type);
     } else {
-      console.warn('[WS] Cannot send, connection not open:', wsRef.current?.readyState);
+      const isDev = import.meta.env.DEV;
+      if (isDev) console.warn('[WS] Cannot send, connection not open:', wsRef.current?.readyState);
     }
   };
 
