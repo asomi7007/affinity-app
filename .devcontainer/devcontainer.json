@@ -4,6 +4,13 @@
   "features": {
     "ghcr.io/devcontainers/features/node:1": {
       "version": "18"
+    },
+    "ghcr.io/devcontainers/features/azure-cli:1": {
+      "version": "latest",
+      "installBicep": true
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
@@ -11,15 +18,18 @@
   "portsAttributes": {
     "3000": {
       "label": "Frontend Dev",
-      "onAutoForward": "notify"
+      "onAutoForward": "notify",
+      "visibility": "public"
     },
     "5173": {
       "label": "Vite Dev Server", 
-      "onAutoForward": "openBrowser"
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
     },
     "8000": {
       "label": "FastAPI Backend",
-      "onAutoForward": "notify"
+      "onAutoForward": "notify",
+      "visibility": "public"
     }
   },
   "customizations": {
@@ -31,7 +41,9 @@
         "bradlc.vscode-tailwindcss",
         "esbenp.prettier-vscode",
         "ms-vscode.vscode-typescript-next",
-        "ms-vscode.vscode-json"
+        "ms-vscode.vscode-json",
+        "ms-vscode.azure-account",
+        "ms-azuretools.vscode-azurecontainerapps"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/usr/local/python/current/bin/python",
@@ -43,5 +55,5 @@
       }
     }
   },
-  "remoteUser": "codespace"
+  "remoteUser": "vscode"
 }

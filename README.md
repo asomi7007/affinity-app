@@ -1,53 +1,256 @@
 # Affinity Diagram Web App
 
-FastAPI + React (Vite) 기반 실시간 어피니티 다이어그램 협업 도구 초기 스켈레톤.
+FastAPI + React (Vite) 기반 실시간 어피니티 다이어그램 협업 도구입니다.  
+**GitHub Codespaces에서 개발 → Docker 컨테이너 빌드 → Azure Container Apps 배포** 전체 과정을 체험하는 핸즈온 프로젝트입니다.
 
-## 🚀 GitHub Codespaces에서 시작하기
+## 📚 프로젝트 소개
+
+### 어피니티 다이어그램이란?
+어피니티 다이어그램(Affinity Diagram)은 브레인스토밍으로 나온 아이디어를 포스트잇에 적고, 유사한 것끼리 그룹화하여 패턴을 발견하는 UX 디자인 방법론입니다. 이 앱은 이 과정을 **실시간 온라인 협업**으로 구현했습니다.
+
+### 핵심 기능
+- 🔄 **실시간 협업**: WebSocket으로 여러 사용자가 동시 작업
+- 📝 **포스트잇 관리**: 드래그 앤 드롭으로 자유롭게 배치
+- 📊 **2x2 매트릭스**: 중요도/긴급도 등 기준으로 분류
+- 🌐 **한글 완벽 지원**: IME(Input Method Editor) 처리로 자모 분리 없음
+- 🎨 **5가지 색상**: 주제별로 색상 구분
+
+## 🏗️ 아키텍처 및 기술 스택
+
+### 전체 시스템 구조
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    브라우저 (클라이언트)                      │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │           React + TypeScript (Vite)                  │  │
+│  │  • 실시간 UI 업데이트 (300ms debounce)               │  │
+│  │  • WebSocket 커스텀 훅                               │  │
+│  │  • IME 조합 이벤트 처리                              │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                           ↕ WebSocket (wss://)
+┌─────────────────────────────────────────────────────────────┐
+│                    서버 (백엔드)                             │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │              FastAPI + WebSocket                     │  │
+│  │  • 비동기 처리 (async/await)                         │  │
+│  │  • Connection Manager (연결 풀)                      │  │
+│  │  • In-Memory 상태 관리                               │  │
+│  │  • 버전 관리 (Last Writer Wins)                      │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Frontend 구조
+```
+frontend/
+├── src/
+│   ├── modules/
+│   │   ├── AffinityDiagramApp.tsx    # 메인 앱 (보드 + 포스트잇 관리)
+│   │   ├── StickyNote.tsx            # 개별 포스트잇 컴포넌트 (드래그)
+│   │   └── Board.tsx                 # 보드 레이아웃
+│   ├── ws/
+│   │   └── useWebSocket.ts           # WebSocket 훅 (자동 재연결)
+│   └── index.css                     # Tailwind CSS
+├── .env.local                        # 환경변수 (Codespaces 자동 생성)
+└── vite.config.ts                    # Vite 설정 (HMR, 프록시)
+```
+
+**주요 기술:**
+- **React 18**: Concurrent 기능, 자동 배칭
+- **TypeScript**: 타입 안정성 및 IntelliSense
+- **Vite**: 번개같이 빠른 HMR (Hot Module Replacement)
+- **Tailwind CSS**: 유틸리티 우선 스타일링
+- **Framer Motion**: 부드러운 애니메이션 (드래그)
+
+### Backend 구조
+```
+backend/
+├── app/
+│   ├── main.py                       # FastAPI 앱 + 정적 파일 서빙
+│   ├── api/
+│   │   └── boards.py                 # REST API 엔드포인트
+│   ├── ws/
+│   │   └── manager.py                # WebSocket Connection Manager
+│   ├── schemas/
+│   │   └── board.py                  # Pydantic 모델
+│   └── services/
+│       └── boards.py                 # 비즈니스 로직
+└── requirements.txt                  # Python 의존성
+```
+
+**주요 기술:**
+- **FastAPI**: 고성능 비동기 웹 프레임워크
+- **WebSocket**: 양방향 실시간 통신 (ws:// / wss://)
+- **Pydantic**: 데이터 검증 및 JSON 직렬화
+- **Uvicorn**: ASGI 서버
+
+### 실시간 동기화 작동 원리
+
+#### 1. 연결 및 초기 동기화
+```
+Client A                    Server                  Client B
+   │                          │                         │
+   ├──── WebSocket 연결 ─────▶│                         │
+   │◀──── sync.state ─────────┤ (현재 보드 상태 전송)   │
+   │                          │◀──── WebSocket 연결 ────┤
+   │                          ├──── sync.state ────────▶│
+```
+
+#### 2. 포스트잇 생성 시
+```
+Client A                    Server                  Client B
+   │                          │                         │
+   ├──── note.add ───────────▶│                         │
+   │                          ├ (메모리에 저장)         │
+   │                          ├──── note.add ─────────▶│ (브로드캐스트)
+   │◀──── note.add ───────────┤ (본인 확인용)           │
+```
+
+#### 3. 실시간 텍스트 입력 시 (한글 지원)
+```
+사용자 입력          Frontend              Server              다른 사용자
+    │                   │                     │                    │
+ "ㅎ" 입력 ─▶ compositionStart                │                    │
+ "하" 입력 ─▶ compositionUpdate (로컬만)      │                    │
+ "한" 입력 ─▶ compositionUpdate (로컬만)      │                    │
+ "한글" 완성 ─▶ compositionEnd ──┐            │                    │
+                                  ├─ 300ms debounce               │
+                                  └─────────▶ note.update ────────▶ 실시간 표시
+```
+
+**핵심 포인트:**
+- **한글 조합 중**: 로컬 화면만 업데이트 (서버 전송 X)
+- **조합 완료 후**: 300ms 내 추가 입력 없으면 서버 전송
+- **빠른 타이핑**: Debounce로 네트워크 부하 최소화
+
+#### 4. 버전 관리 (충돌 방지)
+```javascript
+// 서버가 모든 이벤트에 버전 번호 부여
+{
+  type: 'note.update',
+  id: 'abc123',
+  text: '새로운 내용',
+  version: 42  // ← 서버가 자동 증가
+}
+
+// 클라이언트는 오래된 버전 무시
+if (message.version <= localVersion) {
+  return; // 무시
+}
+```
+
+**LWW (Last Writer Wins) 전략:**
+- 마지막 변경이 이김 (간단하지만 충돌 가능)
+- 향후 CRDT(Conflict-free Replicated Data Type) 적용 예정
+
+## 🎮 앱 사용 방법
+
+### 1. 포스트잇 추가
+1. 좌측 팔레트에서 **색상 버튼** 클릭
+2. 보드 중앙에 새 포스트잇 생성
+3. 자동으로 **편집 모드** 진입
+
+### 2. 내용 입력 및 편집
+- **더블클릭**: 편집 모드 시작
+- **Enter**: 편집 완료 (내용 저장)
+- **Shift+Enter**: 줄바꿈
+- **Esc**: 편집 취소 (변경 사항 버림)
+
+**한글 입력 팁:**
+- "한글"처럼 조합이 완료되면 자동으로 다른 사용자에게 전송
+- 빠르게 타이핑해도 글자가 사라지지 않음
+
+### 3. 포스트잇 이동
+- 포스트잇을 **드래그**하여 원하는 위치로
+- 근처 포스트잇에 **자동 정렬** (Snap)
+- 이동 중에도 실시간으로 다른 사용자에게 표시
+
+### 4. 포스트잇 고정
+- 우측 상단 **📌 핀 버튼** 클릭
+- 고정된 포스트잇은 드래그 불가 (실수 방지)
+
+### 5. 분면 모드 (2x2 매트릭스)
+1. 상단 툴바에서 **4분면 버튼** 클릭
+2. 분면 제목 클릭하여 편집 (예: "중요도 높음")
+3. 포스트잇을 분면에 배치하여 분류
+
+### 6. 실시간 협업
+- 같은 URL을 여러 명이 동시 접속
+- 누가 무엇을 하는지 실시간으로 확인
+- 충돌 걱정 없이 자유롭게 작업
+
+## 🚀 시작하기 (3가지 방법)
+
+### 방법 1: GitHub Codespaces (추천 - 핸즈온용)
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/asomi7007/affinity-app)
 
-**Codespaces에서 자동으로 설정됩니다:**
-- Python 3.12 + Node.js 18
-- 필요한 VS Code 확장 프로그램
-- 백엔드/프론트엔드 의존성 자동 설치
-- 포트 포워딩 (5173, 8000)
+**Codespaces란?**
+- GitHub이 제공하는 **클라우드 개발 환경**
+- 브라우저에서 VS Code를 실행하여 즉시 개발 가능
+- 환경 설정 자동화 (.devcontainer/devcontainer.json)
 
-**Codespaces 실행 후:**
+**자동으로 설정되는 것들:**
+- ✅ Python 3.12 + Node.js 18 설치
+- ✅ VS Code 확장 (Python, ESLint, Tailwind 등)
+- ✅ 백엔드/프론트엔드 의존성 자동 설치
+- ✅ 포트 포워딩 (5173, 8000) Public 설정
+- ✅ 환경변수 자동 생성 (.env.local)
+
+**실행 단계:**
 ```bash
-./start.sh  # 앱 실행
-```
-
-## 구조
-```
-affinity-app/
-  backend/        # FastAPI, WebSocket
-  frontend/       # React Vite TypeScript
-  infra/azure/    # Azure 배포 문서
-  .github/workflows/ci-cd.yml
-```
-
-## 로컬 실행
-
-### 🚀 간편 실행 (권장)
-```bash
-# 한 번에 백엔드와 프론트엔드 모두 실행
+# 1. Codespaces 생성 (위 버튼 클릭)
+# 2. 터미널에서 실행
 ./start.sh
 
-# 서버 종료
-./stop.sh
+# 3. VS Code 하단 PORTS 탭에서 5173 포트 클릭
+# 4. 브라우저에서 앱 열림!
 ```
 
-### 📋 실행 정보
-- **프론트엔드**: http://localhost:5173
-- **백엔드 API**: http://localhost:8000 (Swagger: /docs)
-- **WebSocket**: ws://localhost:8000/ws/board/{board_id}
+**⚠️ 중요: 포트 가시성 확인**
+WebSocket이 작동하려면 **포트 8000이 Public**이어야 합니다:
+1. VS Code 하단 **"PORTS"** 탭 클릭
+2. 8000 포트 찾기
+3. "Visibility" 열 확인
+4. "Private"이면 **우클릭 → Port Visibility → Public** 선택
 
-### 🔧 수동 실행 (개발용)
+**자동 설정 파일:**
+```json
+// .devcontainer/devcontainer.json
+{
+  "forwardPorts": [5173, 8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "FastAPI Backend",
+      "visibility": "public"  // ← 자동 Public 설정
+    }
+  }
+}
+```
+
+
+### 방법 2: 로컬 개발 환경
+
+**요구사항:**
+- Python 3.12+
+- Node.js 18+
+- Git
+
+**설치 및 실행:**
 ```bash
+# 저장소 클론
+git clone https://github.com/asomi7007/affinity-app.git
+cd affinity-app
+
+# 간편 실행 (권장)
+./start.sh
+
+# 또는 수동 실행
 # Backend
 cd backend
-python3 -m venv venv  # 가상환경 생성 (최초 1회)
-source venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
@@ -57,242 +260,302 @@ npm install
 npm run dev -- --host
 ```
 
-### 외부 IP / 같은 네트워크 접속
-개발 PC IP가 `192.168.x.x` 라면 다른 단말 브라우저에서:
+**접속:**
+- 프론트엔드: http://localhost:5173
+- 백엔드 API: http://localhost:8000
+- API 문서: http://localhost:8000/docs
 
-1. 백엔드 실행 시 `--host 0.0.0.0` 지정
+### 방법 3: Docker로 실행
+
+**한 줄로 실행:**
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+docker run -p 8000:8000 ghcr.io/asomi7007/affinity-app:latest
 ```
-2. 프론트 실행(기본 Vite dev 서버 5173 포트 노출)
+
+**로컬에서 빌드:**
 ```bash
-npm run dev -- --host
+docker build -t affinity-app .
+docker run -p 8000:8000 affinity-app
 ```
-3. 다른 PC에서 접속
-```
-http://192.168.x.x:5173
-```
-자동으로 `http://192.168.x.x:8000` 을 API 베이스로 추론(포트 5173 → 8000 변환)합니다.
 
-프록시/포트가 다르면 환경변수로 직접 지정:
+**Docker Compose (개발용):**
 ```bash
-# Windows PowerShell 예시
-$env:VITE_API_BASE="http://192.168.x.x:9000"
-npm run dev
+docker-compose up
 ```
 
-### 환경 변수 정리
-| 이름 | 용도 | 기본값 |
-|------|------|--------|
-| `VITE_API_BASE` | REST & WS 베이스 URL | `window.location.hostname` + 추론 포트(5173→8000) |
+## 🐳 Docker 컨테이너 이해하기
 
-### 실시간 동기화 & 버전 정책(LWW)
-- 서버는 보드별 인메모리 상태(`notes`, `gridMode`, `sectionTitles`, `version`) 유지
-- 클라이언트 최초 연결 시 `sync.request` → 서버 `sync.state` 응답
-- 변경 이벤트 발생 시 서버가 version 증가 후 `version` 필드 포함 브로드캐스트
-- 클라이언트는 수신 이벤트 `version <= localVersion` 이면 무시 (LWW: Last Writer Wins)
-- 충돌 가능성 낮은 단순 편집 모델 (동일 노트 동시 편집 시 마지막 수신이 승리)
+### 멀티 스테이지 빌드 전략
+```dockerfile
+# ============ Stage 1: Frontend 빌드 ============
+FROM node:18 AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+# 결과: /app/frontend/dist 에 정적 파일 생성
 
-향후 개선 아이디어:
-- 부분 필드 CRDT(Text) 적용
-- Optimistic Lock (클라이언트가 보낸 baseVersion 불일치 시 재동기화)
-- Redis Pub/Sub or Azure Web PubSub 확장
+# ============ Stage 2: 최종 이미지 ============
+FROM python:3.12-slim
+WORKDIR /app
 
+# Backend 복사 및 설치
+COPY backend/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/ ./
 
-## GitHub Actions
-- 테스트, 프론트 빌드, 컨테이너 이미지(GHCR) 빌드 & 푸시
-- Azure 배포 스텁 (Secrets 필요)
+# Frontend 빌드 결과물 복사
+COPY --from=frontend-builder /app/frontend/dist ./static
 
-## Azure Container Apps로 배포하기
+# FastAPI가 정적 파일도 서빙
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
 
-이 프로젝트는 FastAPI(백엔드)와 React(Vite, 프론트엔드)가 통합된 컨테이너 이미지를 Azure Container Apps에 배포하는 구조입니다.
+**왜 멀티 스테이지?**
+- ✅ **이미지 크기 감소**: Node.js 런타임 제외 (300MB → 150MB)
+- ✅ **빌드 도구 분리**: 개발 도구가 프로덕션에 포함 안 됨
+- ✅ **보안 강화**: 불필요한 패키지 제거
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fasomi7007%2Faffinity-app%2Fmain%2Finfra%2Fazure%2Fmain.json)
+**정적 파일 서빙:**
+```python
+# backend/app/main.py
+from fastapi.staticfiles import StaticFiles
 
-> 중요: 위 버튼은 `infra/azure/main.json` (Bicep 컴파일 결과) 파일이 repo main 브랜치에 존재해야 정상 동작합니다. Container Apps 리소스를 생성합니다.
+# React 빌드 파일 서빙
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
+```
 
-### 리소스 이름 충돌 방지 (랜덤 suffix)
-동일한 `projectName` 으로 여러 사람이 같은 구독/리소스그룹에 배포할 경우 이름 충돌을 막기 위해 기본적으로 `-xxxx` 형태(4글자 소문자 hex)의 suffix 가 자동 부여됩니다. (예: `affinity-app-ab12`)
+## ☁️ Azure Container Apps 배포
 
-- Bicep 파라미터 `enableRandomSuffix` = true (기본) 시 적용
-- suffix 는 `uniqueString(resourceGroup().id, projectName)` 기반 deterministic 값 → 같은 RG/같은 projectName 재배포 시 동일 이름 유지
-- 완전 재배포마다 다른 임의값(비결정) 원하면 추가 모듈/utcNow() seed 로직 필요 (현재 템플릿은 안정적 재배포 우선)
+### GitHub Actions로 자동 배포 (CI/CD)
 
-### 1) 컨테이너 이미지 빌드 및 푸시
-GitHub Actions 또는 로컬에서 이미지 빌드 및 푸시:
+**🚀 가장 강력한 방법 - 코드 푸시만 하면 끝!**
+
+**장점:**
+- ✅ `git push` 한 번으로 자동 빌드 → 테스트 → 배포
+- ✅ 버전 관리 및 자동 롤백 가능
+- ✅ Health Check 자동 실행
+- ✅ 프로덕션 Best Practice
+
+**작동 방식:**
+```
+git push origin main
+  ↓
+GitHub Actions 자동 실행
+  ↓
+1. Python + TypeScript 테스트
+  ↓
+2. Docker 이미지 빌드 → GitHub Container Registry
+  ↓
+3. Azure Container Apps 자동 배포 (생성 or 업데이트)
+  ↓
+4. Health Check (/docs 엔드포인트)
+  ↓
+✅ 앱 URL이 GitHub Actions Summary에 표시!
+```
+
+**⚡ 초간단 설정 (대화형 스크립트):**
+
 ```bash
-docker build -t ghcr.io/asomi7007/affinity-app:latest .
-echo $CR_PAT | docker login ghcr.io -u asomi7007 --password-stdin
-docker push ghcr.io/asomi7007/affinity-app:latest
+# 자동 설정 스크립트 실행
+./scripts/setup-azure-cicd.sh
 ```
-- GHCR(Public/Private) 사용 시 권한 설정을 확인하세요.
 
-### 2) Bicep → ARM 템플릿 변환 (CI 또는 수동)
-Azure 포털 Deploy 버튼은 ARM(JSON) URL을 요구하므로 Bicep을 JSON으로 사전 변환해야 합니다:
+**스크립트가 자동으로 해주는 것:**
+1. ✅ Azure CLI 설치 여부 확인 (없으면 자동 설치)
+2. ✅ Azure 로그인 (브라우저 인증)
+3. ✅ 구독 선택 (1개면 자동, 여러개면 선택)
+4. ✅ GitHub 저장소 정보 자동 감지
+5. ✅ 리소스 이름 자동 생성 (또는 커스터마이징)
+6. ✅ 리소스 그룹 생성
+7. ✅ Azure AD 앱 및 서비스 주체 생성
+8. ✅ Federated Credential 설정 (비밀번호 불필요!)
+9. ✅ GitHub Secrets 자동 설정 (GitHub CLI 사용)
+
+**대화형 예시:**
 ```bash
-az bicep build --file infra/azure/main.bicep --outdir infra/azure
+$ ./scripts/setup-azure-cicd.sh
+
+╔═══════════════════════════════════════════════════════════╗
+║        Azure CI/CD 자동 설정 스크립트                     ║
+╚═══════════════════════════════════════════════════════════╝
+
+✅ Azure CLI가 이미 설치되어 있습니다 (버전: 2.65.0)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔑 Azure 로그인
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ 이미 Azure에 로그인되어 있습니다.
+현재 계정:
+  이름: My Subscription
+  구독 ID: abc123...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚙️ Azure 리소스 설정
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+프로젝트 이름 (영문, 숫자, 하이픈만 가능) [기본값: affinity-app]: 
+리소스 그룹 이름 [기본값: affinity-app-rg-20251107-a1b2]: 
+Azure 지역 [기본값: koreacentral]: 
+Container App 이름 [기본값: affinity-app]: 
+...
+
+✅ 설정 완료!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎉 GitHub Secrets 설정
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GitHub CLI를 사용하여 자동으로 Secrets를 설정하시겠습니까? [Y/n]: 
+
+✅ GitHub Secrets 자동 설정 완료!
 ```
-생성된 `main.json` 을 main 브랜치에 커밋하세요.
 
-### 3) 🚀 자동 배포 스크립트 (권장)
+**설정 후 바로 테스트:**
+```bash
+# 코드 수정
+echo "# CI/CD Test" >> README.md
 
-코드스페이스나 로컬 환경에서 한 번의 명령으로 리소스 그룹 생성부터 배포까지 자동화:
+# 커밋 및 푸시
+git add .
+git commit -m "test: CI/CD pipeline"
+git push origin main
 
+# GitHub Actions 확인
+# https://github.com/asomi7007/affinity-app/actions
+```
+
+**📚 상세 설정 가이드:** [.github/SETUP_CICD.md](.github/SETUP_CICD.md) 참고
+
+**💡 팁:**
+- 모든 값은 기본값 제공 (엔터만 치면 OK)
+- GitHub CLI 로그인되어 있으면 Secrets도 자동 설정
+- 설정 정보는 `.azure-cicd-config` 파일에 저장됨
+- Codespaces에는 Azure CLI가 자동 설치됨
+
+### 수동 배포 (스크립트)
+
+**간편 배포 (권장):**
 ```bash
 # 실행 권한 부여
 chmod +x scripts/deploy.sh
 
-# 기본 설정으로 배포 (이미지: ghcr.io/asomi7007/affinity-app:latest, 위치: koreasouth)  
+# 기본 설정으로 배포
 ./scripts/deploy.sh
 
-# 사용자 정의 설정으로 배포
+# 커스텀 설정
 ./scripts/deploy.sh "ghcr.io/asomi7007/affinity-app:v1.0" "koreacentral"
 ```
 
-**PowerShell 사용 시:**
+**PowerShell:**
 ```powershell
-# 기본 설정으로 배포
-.\scripts\deploy.ps1
-
-# 사용자 정의 설정으로 배포
-.\scripts\deploy.ps1 -ContainerImage "ghcr.io/asomi7007/affinity-app:v1.0" -Location "koreacentral"
+.\scripts\deploy.ps1 -ContainerImage "ghcr.io/asomi7007/affinity-app:latest"
 ```
 
-**배포 스크립트 특징:**
-- 🎯 **자동 리소스 그룹 생성**: `affinityapp-YYYYMMDD-XXXX` 형식 (날짜 + 랜덤 4자리)
-- 🔍 **배포 미리보기**: What-If 분석으로 변경사항 미리 확인
-- 📊 **배포 정보 저장**: `deployment-info.txt`에 URL, 리소스 그룹 등 저장
-- 🎨 **컬러 출력**: 진행 상황을 시각적으로 확인
-- ⚡ **리소스 정리**: `./scripts/cleanup.sh <리소스그룹명>` 으로 간편 삭제
+**자동화 내용:**
+1. ✅ 리소스 그룹 생성 (affinityapp-YYYYMMDD-XXXX)
+2. ✅ Container Apps 환경 구성
+3. ✅ What-If 분석 (변경 사항 미리보기)
+4. ✅ 컨테이너 배포
+5. ✅ 공개 URL 생성 및 출력
 
-### 4) Azure CLI로 수동 배포 (고급 사용자)
+### Azure Portal "Deploy to Azure" 버튼
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fasomi7007%2Faffinity-app%2Fmain%2Finfra%2Fazure%2Fmain.json)
+
+**장점:**
+- ✅ 클릭 한 번으로 배포
+- ✅ GUI로 파라미터 입력
+- ✅ Azure 초보자에게 적합
+
+**단점:**
+- ❌ 버전 관리 어려움
+- ❌ CI/CD 파이프라인 없음
+- ❌ 매번 수동으로 버튼 클릭 필요
+
+**배포 단계:**
+1. 위 버튼 클릭
+2. Azure 포털 로그인
+3. 파라미터 입력:
+   - **Project Name**: `affinity-app`
+   - **Location**: `Korea Central`
+   - **Container Image**: `ghcr.io/asomi7007/affinity-app:latest`
+4. **Review + Create** → **Create**
+5. 5-10분 후 배포 완료
+
+**배포 후 URL 확인:**
 ```bash
-# 리소스 그룹 생성
-az group create --name affinity-app-rg --location koreasouth
-
-# 배포 미리보기
-az deployment group what-if \
+az containerapp show \
+  --name affinity-app \
   --resource-group affinity-app-rg \
-  --template-file infra/azure/main.bicep \
-  --parameters containerImage=ghcr.io/asomi7007/affinity-app:latest
-
-# Container Apps 배포
-az deployment group create \
-  --resource-group affinity-app-rg \
-  --template-file infra/azure/main.bicep \
-  --parameters containerImage=ghcr.io/asomi7007/affinity-app:latest
+  --query "properties.latestRevisionFqdn" \
+  -o tsv
 ```
 
-### 4) 포털 배포 시 파라미터
-| 파라미터 | 설명 | 예시 |
-|----------|------|------|
-| projectName | 리소스 접두사 | affinity | 
-| location | 배포 지역 | koreacentral |
-| containerImage | 풀 이미지 경로 | ghcr.io/asomi7007/affinity-app:latest |
-| targetPort | 컨테이너 노출 포트 | 8000 (FastAPI) |
-| ingress | 외부 노출 여부 | external |
+### 배포 방법 비교
 
-### 5) GitHub Actions로 자동 배포 (선택)
+| 방법 | 장점 | 단점 | 추천 대상 |
+|------|------|------|----------|
+| **GitHub Actions** | • 자동 CI/CD<br>• 버전 관리<br>• 롤백 가능 | • 초기 설정 복잡 | 프로덕션 환경 |
+| **스크립트 (deploy.sh)** | • 빠른 배포<br>• 커스터마이징 쉬움 | • 수동 실행 필요 | 개발/테스트 |
+| **Deploy to Azure 버튼** | • 클릭 한 번<br>• 설정 간단 | • 버전 관리 X<br>• 자동화 X | 데모/PoC |
 
-`.github/workflows/` 에 아래 스니펫을 추가하면 main push 시 Container Apps 자동 배포 가능.
-
-```yaml
-name: deploy-container-apps
-on:
-  push:
-    branches: [ main ]
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Deploy to Container Apps
-        run: |
-          az containerapp update \
-            --name ${{ secrets.CONTAINER_APP_NAME }} \
-            --resource-group ${{ secrets.AZURE_RG }} \
-            --image ${{ secrets.CONTAINER_IMAGE }} \
-            --target-port 8000 \
-            --ingress external
+## 📁 프로젝트 파일 구조
 ```
-
-필요 Secrets
-
-| 이름 | 설명 |
-|------|------|
-| `AZURE_CLIENT_ID` | Federated Credential이 연결된 App Registration 클라이언트 ID |
-| `AZURE_TENANT_ID` | Azure AD Tenant ID |
-| `AZURE_SUBSCRIPTION_ID` | 구독 ID |
-| `AZURE_RG` | 리소스 그룹 이름 |
-| `CONTAINER_IMAGE` | 배포할 컨테이너 이미지 (예: ghcr.io/asomi7007/affinity-app:latest) |
-| `CONTAINER_APP_NAME` | Container App 리소스 이름 |
-
-### 6) 환경 변수 및 포트 설정
-
-- FastAPI는 기본적으로 8000 포트에서 실행되어야 하며, `targetPort`와 일치해야 합니다.
-- 환경 변수는 `--env-vars` 옵션 또는 Bicep 템플릿에서 지정합니다.
-
-### 7) 배포 후 확인 및 커스텀 도메인
-
-- 배포가 완료되면 Azure Portal 또는 CLI에서 Container Apps의 URL을 확인할 수 있습니다.
-- 필요 시 [커스텀 도메인 및 SSL](https://learn.microsoft.com/ko-kr/azure/container-apps/custom-domains) 설정을 진행하세요.
-
-> 참고: Bicep 템플릿의 `containerImage` 파라미터는 기본값(`ghcr.io/asomi7007/affinity-app:latest`)을 포함합니다. 다른 레지스트리를 사용하거나 버전 태그를 고정하려면 배포 화면에서 값만 교체하면 됩니다.
-
-### 8) 문제 해결
-
-| 증상 | 점검 항목 |
-|------|-----------|
-| 앱 502/기동 실패 | 컨테이너 로그: `az containerapp logs show --name <app> --resource-group <rg>` |
-| 포트 바인딩 오류 | FastAPI 실행 포트와 `targetPort` 일치 여부 |
-| 이미지 Pull 실패 | Managed Identity / GHCR public 여부 확인 |
-| Health Check 실패 | `/docs` 정상 응답 여부 |
-
-### 9) 리소스 정리
-
-배포된 리소스를 정리하려면:
-
-```bash
-# 특정 리소스 그룹 삭제 (스크립트 사용 - 권장)
-./scripts/cleanup.sh affinityapp-20240924-a1b2
-
-# 배포된 모든 affinity 리소스 그룹 확인
-az group list --query "[?starts_with(name, 'affinityapp-')].{Name:name, Location:location}" --output table
-
-# 수동 삭제
-az group delete --name <resource-group-name> --yes --no-wait
+affinity-app/
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml              # GitHub Actions 워크플로우
+├── .devcontainer/
+│   ├── devcontainer.json          # Codespaces 설정
+│   └── post-create.sh             # 초기화 스크립트
+├── backend/
+│   ├── app/
+│   │   ├── main.py                # FastAPI 앱 + 정적 파일 서빙
+│   │   ├── api/
+│   │   │   └── boards.py          # REST API 엔드포인트
+│   │   ├── ws/
+│   │   │   └── manager.py         # WebSocket Connection Manager
+│   │   ├── schemas/
+│   │   │   └── board.py           # Pydantic 모델 (데이터 검증)
+│   │   └── services/
+│   │       └── boards.py          # 비즈니스 로직
+│   ├── requirements.txt           # Python 패키지
+│   └── Dockerfile                 # Backend 전용 (개발용)
+├── frontend/
+│   ├── src/
+│   │   ├── modules/
+│   │   │   ├── AffinityDiagramApp.tsx  # 메인 컴포넌트
+│   │   │   ├── StickyNote.tsx          # 포스트잇 컴포넌트
+│   │   │   └── Board.tsx               # 보드 레이아웃
+│   │   ├── ws/
+│   │   │   └── useWebSocket.ts         # WebSocket 훅
+│   │   └── vite-env.d.ts               # Vite 타입 정의
+│   ├── .env.local                 # 로컬 환경변수 (자동 생성)
+│   ├── .env.development           # 개발 환경 기본값
+│   ├── .env.production            # 프로덕션 환경 기본값
+│   ├── package.json               # Node.js 패키지
+│   └── vite.config.ts             # Vite 설정
+├── infra/
+│   └── azure/
+│       ├── main.bicep             # Azure 리소스 정의 (IaC)
+│       ├── main.json              # ARM 템플릿 (Bicep 컴파일 결과)
+│       └── README.md              # Azure 배포 가이드
+├── scripts/
+│   ├── deploy.sh                  # 배포 자동화 (Bash)
+│   ├── deploy.ps1                 # 배포 자동화 (PowerShell)
+│   ├── cleanup.sh                 # 리소스 정리
+│   ├── setup-env.sh               # 환경변수 자동 생성 (Codespaces)
+│   └── setup-ports.sh             # 포트 가시성 설정
+├── Dockerfile                     # 멀티 스테이지 빌드
+├── docker-compose.yml             # 로컬 개발용
+├── start.sh                       # 개발 서버 시작
+├── stop.sh                        # 개발 서버 종료
+└── README.md                      # 이 파일
 ```
-
-**PowerShell 사용 시:**
-```powershell
-# 리소스 그룹 목록 확인 후 삭제
-az group list --query "[?starts_with(name, 'affinityapp-')].name" --output table
-az group delete --name "affinityapp-20240924-a1b2" --yes --no-wait
-```
-
-### 참고 문서
-
-- [Azure Container Apps 시작하기](https://learn.microsoft.com/ko-kr/azure/container-apps/get-started)
-- [Container Apps Bicep 예제](https://learn.microsoft.com/ko-kr/azure/container-apps/bicep-deploy)
-- [Container Apps 환경 변수 관리](https://learn.microsoft.com/ko-kr/azure/container-apps/environment-variables)
-- [Container Apps 커스텀 도메인](https://learn.microsoft.com/ko-kr/azure/container-apps/custom-domains)
-
----
-
-
-## 향후 로드맵
-- 노트 이동 이벤트 서버 검증 및 타입 정의 강화
-- Board 영속화 (PostgreSQL + SQLAlchemy/SQLModel)
-- 인증 (JWT 또는 Azure AD)
-- Web PubSub / Redis 확장
-- 그룹화(Cluster) 알고리즘 및 색상 태그
-- 보드 내 검색 / 필터
 
 ## Debug & 진단 도구
 실시간 드래그 / 생성 문제를 빠르게 진단하기 위한 런타임 플래그와 패널을 제공합니다.

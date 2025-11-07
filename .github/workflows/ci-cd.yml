@@ -122,11 +122,94 @@ jobs:
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     
-    - name: Deploy to Azure Container Apps
+    - name: Check if Container App exists
+      id: check-app
       run: |
-        echo "Deploying ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest to production"
-        # Example Azure Container Apps deployment:
-        # az containerapp update \
-        #   --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
-        #   --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-        #   --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        APP_EXISTS=$(az containerapp show \
+          --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
+          --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+          --query "name" -o tsv 2>/dev/null || echo "")
+        
+        if [ -z "$APP_EXISTS" ]; then
+          echo "exists=false" >> $GITHUB_OUTPUT
+        else
+          echo "exists=true" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Create Container App (if not exists)
+      if: steps.check-app.outputs.exists == 'false'
+      run: |
+        echo "🚀 Creating new Container App..."
+        
+        # Container Apps 환경 생성 (없으면)
+        ENV_EXISTS=$(az containerapp env show \
+          --name ${{ secrets.AZURE_CONTAINER_APP_ENV || 'affinity-app-env' }} \
+          --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+          --query "name" -o tsv 2>/dev/null || echo "")
+        
+        if [ -z "$ENV_EXISTS" ]; then
+          echo "📦 Creating Container Apps Environment..."
+          az containerapp env create \
+            --name ${{ secrets.AZURE_CONTAINER_APP_ENV || 'affinity-app-env' }} \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --location ${{ secrets.AZURE_LOCATION || 'koreacentral' }}
+        fi
+        
+        # Container App 생성
+        az containerapp create \
+          --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
+          --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+          --environment ${{ secrets.AZURE_CONTAINER_APP_ENV || 'affinity-app-env' }} \
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+          --target-port 8000 \
+          --ingress external \
+          --min-replicas 1 \
+          --max-replicas 3 \
+          --cpu 0.5 \
+          --memory 1.0Gi \
+          --registry-server ${{ env.REGISTRY }} \
+          --registry-username ${{ github.actor }} \
+          --registry-password ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Update Container App (if exists)
+      if: steps.check-app.outputs.exists == 'true'
+      run: |
+        echo "♻️ Updating existing Container App..."
+        az containerapp update \
+          --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
+          --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+          --registry-server ${{ env.REGISTRY }} \
+          --registry-username ${{ github.actor }} \
+          --registry-password ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Get Application URL
+      id: get-url
+      run: |
+        APP_URL=$(az containerapp show \
+          --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
+          --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+          --query "properties.configuration.ingress.fqdn" -o tsv)
+        
+        echo "url=https://$APP_URL" >> $GITHUB_OUTPUT
+        echo "### 🎉 배포 완료!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Application URL:** https://$APP_URL" >> $GITHUB_STEP_SUMMARY
+        echo "**Image:** ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+        echo "**Resource Group:** ${{ secrets.AZURE_RESOURCE_GROUP }}" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Health Check
+      run: |
+        echo "🏥 Checking application health..."
+        sleep 30  # Wait for app to start
+        
+        APP_URL="${{ steps.get-url.outputs.url }}"
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL/docs" || echo "000")
+        
+        if [ "$HTTP_CODE" = "200" ]; then
+          echo "✅ Health check passed (HTTP $HTTP_CODE)"
+          echo "### ✅ Health Check Passed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "⚠️ Health check returned HTTP $HTTP_CODE"
+          echo "### ⚠️ Health Check Warning (HTTP $HTTP_CODE)" >> $GITHUB_STEP_SUMMARY
+        fi

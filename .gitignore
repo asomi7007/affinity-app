@@ -1,33 +1,51 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-.pytest_cache/
-.mypy_cache/
-.venv/
-venv/
-
-# Node / Frontend
+# Dependencies
 node_modules/
-dist/
-*.log
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Environment variables
+.env
+.env.local
+.azure-cicd-config
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .idea/
+*.swp
+*.swo
+*~
 
-# OS / Misc
+# OS
+.DS_Store
 Thumbs.db
-*.DS_Store
 
-# Env
-.env
-frontend/.env
+# Build outputs
+dist/
+build/
+*.egg-info/
+.eggs/
 
-# Process IDs
-*.pid
-backend.pid
-frontend.pid
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+frontend.log
+backend.log
 
-# Backend venv
-backend/venv/
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Temporary files
+*.tmp
+.cache/

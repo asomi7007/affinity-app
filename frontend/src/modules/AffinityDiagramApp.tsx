@@ -60,6 +60,7 @@ const AffinityDiagramApp: React.FC = () => {
   const forceRerender = useState(0)[1];
   const composingNoteRef = useRef<{id:string; value:string}|null>(null);
   const composingSectionRef = useRef<{section:string; value:string}|null>(null);
+  const textUpdateTimerRef = useRef<{[id:string]: number}>({});
   // IME 입력(한글 등) 중복 문제를 줄이기 위해 별도 상태를 두지 않고
   // nativeEvent.isComposing 플래그만 활용한다.
   const whiteboardRef = useRef<HTMLDivElement | null>(null);
@@ -271,7 +272,10 @@ const AffinityDiagramApp: React.FC = () => {
   const handleKeyDown = (e: React.KeyboardEvent, cb: () => void) => {
     // 조합 중(한글/일본어 등)에는 Enter 처리 안 함
     if ((e.nativeEvent as any).isComposing) return;
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); cb(); }
+    if (e.key === 'Enter' && !e.shiftKey) { 
+      e.preventDefault(); 
+      cb(); 
+    }
   };
 
   const updateSectionTitle = (section: string, title: string, opts?: { final?: boolean }) => {
@@ -328,13 +332,48 @@ const AffinityDiagramApp: React.FC = () => {
             value={sectionDrafts[section]}
             placeholder={placeholder}
             spellCheck={false}
-            onChange={e=>{ updateSectionTitle(section, e.target.value); }}
+            onChange={e=>{ 
+              const v = e.target.value;
+              updateSectionTitle(section, v);
+              // 조합 중이 아닐 때만 ref 클리어
+              if (!(e.nativeEvent as any).isComposing) {
+                composingSectionRef.current = null;
+              }
+            }}
+            onCompositionStart={e => {
+              // 조합 시작: 현재 값으로 ref 설정
+              composingSectionRef.current = { section, value: sectionDrafts[section] };
+            }}
+            onCompositionUpdate={e => {
+              // 조합 중: 실시간 값 업데이트
+              const target = e.target as HTMLInputElement;
+              const v = target.value;
+              composingSectionRef.current = { section, value: v };
+              updateSectionTitle(section, v);
+            }}
+            onCompositionEnd={e => {
+              // 조합 완료: ref 초기화 및 최종 값 반영
+              const target = e.target as HTMLInputElement;
+              updateSectionTitle(section, target.value);
+              composingSectionRef.current = null;
+            }}
             onKeyDown={e=>{
               if((e.nativeEvent as any).isComposing) return;
-              if(e.key==='Enter') { e.preventDefault(); updateSectionTitle(section, sectionDrafts[section], { final:true }); setEditingSection(null); }
-              else if(e.key==='Escape'){ e.preventDefault(); setSectionDrafts(prev=>({...prev,[section]:sectionTitles[section]})); setEditingSection(null); }
+              if(e.key==='Enter') { 
+                e.preventDefault(); 
+                updateSectionTitle(section, sectionDrafts[section], { final:true }); 
+                setEditingSection(null); 
+              }
+              else if(e.key==='Escape'){ 
+                e.preventDefault(); 
+                setSectionDrafts(prev=>({...prev,[section]:sectionTitles[section]})); 
+                setEditingSection(null); 
+              }
             }}
-            onBlur={()=>{ updateSectionTitle(section, sectionDrafts[section], { final:true }); setEditingSection(null); }}
+            onBlur={()=>{ 
+              updateSectionTitle(section, sectionDrafts[section], { final:true }); 
+              setEditingSection(null); 
+            }}
             className="min-w-[4rem] max-w-[14rem] bg-transparent border-b-2 border-gray-400 outline-none font-semibold text-lg text-gray-800 px-0.5"
             style={{lineHeight:'1.1'}}
           />
@@ -516,13 +555,70 @@ const AffinityDiagramApp: React.FC = () => {
                                   onChange={e=>{
                                     const v = e.target.value;
                                     setEditingDraft(v);
-                                    if ((e.nativeEvent as any).isComposing){
-                                      composingNoteRef.current = { id: p.id, value: v };
+                                    
+                                    // 로컬 상태는 즉시 업데이트
+                                    setPostits(prev => prev.map(n => n.id === p.id ? { ...n, text: v } : n));
+                                    
+                                    // 조합 중이 아닐 때만 서버 전송 (debounce)
+                                    if (!(e.nativeEvent as any).isComposing) {
+                                      composingNoteRef.current = null;
+                                      
+                                      // 기존 타이머 취소
+                                      if (textUpdateTimerRef.current[p.id]) {
+                                        clearTimeout(textUpdateTimerRef.current[p.id]);
+                                      }
+                                      
+                                      // 300ms 후 서버 전송 (debounce)
+                                      textUpdateTimerRef.current[p.id] = window.setTimeout(() => {
+                                        send({ type:'note.update', id:p.id, text:v });
+                                      }, 300);
                                     }
                                   }}
-                                  onCompositionEnd={e=>{ composingNoteRef.current=null; /* 확정은 blur/Enter에서 */ }}
-                                  onBlur={e=>{ send({ type:'note.update', id:p.id, text:editingDraft }); handleEditComplete(); composingNoteRef.current=null; }}
-                                  onKeyDown={e=>handleKeyDown(e,()=>{ send({ type:'note.update', id:p.id, text:editingDraft }); handleEditComplete(); })}
+                                  onCompositionStart={e => {
+                                    // 조합 시작: 현재 값으로 ref 설정
+                                    composingNoteRef.current = { id: p.id, value: editingDraft };
+                                  }}
+                                  onCompositionUpdate={e => {
+                                    // 조합 중: 실시간 값 업데이트
+                                    const target = e.target as HTMLTextAreaElement;
+                                    const v = target.value;
+                                    composingNoteRef.current = { id: p.id, value: v };
+                                    setEditingDraft(v);
+                                    setPostits(prev => prev.map(n => n.id === p.id ? { ...n, text: v } : n));
+                                  }}
+                                  onCompositionEnd={e => { 
+                                    // 조합 완료: ref 초기화 및 최종 값 서버 전송
+                                    const target = e.target as HTMLTextAreaElement;
+                                    const v = target.value;
+                                    setEditingDraft(v);
+                                    setPostits(prev => prev.map(n => n.id === p.id ? { ...n, text: v } : n));
+                                    composingNoteRef.current = null;
+                                    
+                                    // 조합 완료 후 즉시 서버 전송
+                                    if (textUpdateTimerRef.current[p.id]) {
+                                      clearTimeout(textUpdateTimerRef.current[p.id]);
+                                    }
+                                    send({ type:'note.update', id:p.id, text:v });
+                                  }}
+                                  onBlur={e=>{ 
+                                    // blur 시 타이머 취소하고 즉시 전송
+                                    if (textUpdateTimerRef.current[p.id]) {
+                                      clearTimeout(textUpdateTimerRef.current[p.id]);
+                                      delete textUpdateTimerRef.current[p.id];
+                                    }
+                                    send({ type:'note.update', id:p.id, text:editingDraft }); 
+                                    handleEditComplete(); 
+                                    composingNoteRef.current=null; 
+                                  }}
+                                  onKeyDown={e=>handleKeyDown(e,()=>{ 
+                                    // Enter 시 타이머 취소하고 즉시 전송
+                                    if (textUpdateTimerRef.current[p.id]) {
+                                      clearTimeout(textUpdateTimerRef.current[p.id]);
+                                      delete textUpdateTimerRef.current[p.id];
+                                    }
+                                    send({ type:'note.update', id:p.id, text:editingDraft }); 
+                                    handleEditComplete(); 
+                                  })}
                                   placeholder="아이디어를 입력하세요..."
                                   autoFocus
                                   rows={3}

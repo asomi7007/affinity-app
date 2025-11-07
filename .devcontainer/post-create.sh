@@ -30,10 +30,37 @@ echo "🔧 Setting up development tools..."
 pip install --no-cache-dir pre-commit 2>/dev/null || true
 pre-commit install 2>/dev/null || true
 
+# Azure CLI 버전 확인
+echo "☁️ Checking Azure CLI..."
+if command -v az &> /dev/null; then
+    AZ_VERSION=$(az version --query '"azure-cli"' -o tsv 2>/dev/null || echo "unknown")
+    echo "✅ Azure CLI installed: $AZ_VERSION"
+else
+    echo "⚠️ Azure CLI not found (will be installed by devcontainer feature)"
+fi
+
+# GitHub CLI 버전 확인
+echo "🐙 Checking GitHub CLI..."
+if command -v gh &> /dev/null; then
+    GH_VERSION=$(gh --version | head -1)
+    echo "✅ $GH_VERSION"
+else
+    echo "⚠️ GitHub CLI not found (will be installed by devcontainer feature)"
+fi
+
+# 스크립트 실행 권한 설정
+echo "🔐 Setting script permissions..."
+chmod +x scripts/*.sh 2>/dev/null || true
+
+echo ""
 echo "✅ Development environment setup complete!"
 echo ""
 echo "🌟 Quick start commands:"
-echo "  Backend:  cd backend && uvicorn app.main:app --reload --host 0.0.0.0"
-echo "  Frontend: cd frontend && npm run dev -- --host"
-echo "  Tests:    cd backend && pytest"
+echo "  개발 서버:    ./start.sh"
+echo "  Backend:      cd backend && uvicorn app.main:app --reload --host 0.0.0.0"
+echo "  Frontend:     cd frontend && npm run dev -- --host"
+echo "  Tests:        cd backend && pytest"
+echo ""
+echo "☁️ Azure CI/CD 설정:"
+echo "  ./scripts/setup-azure-cicd.sh"
 echo ""
