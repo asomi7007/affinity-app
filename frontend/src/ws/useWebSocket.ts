@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 
 /**
  * 환경별 API/WebSocket URL 자동 감지
@@ -38,83 +38,183 @@ function getApiBaseUrl(): string {
   return `${loc.protocol}//${loc.hostname}:${apiPort}`;
 }
 
-export function useWebSocket(path: string, onMessage: (data: any) => void) {
+interface UseWebSocketOptions {
+  onMessage?: (data: any) => void;
+  onOpen?: () => void;
+  onClose?: () => void;
+  onError?: (error: Event) => void;
+  reconnectAttempts?: number;
+  reconnectInterval?: number;
+}
+
+export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
+  const {
+    onMessage,
+    onOpen,
+    onClose,
+    onError,
+    reconnectAttempts = 5,
+    reconnectInterval = 3000,
+  } = options;
+
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<number | null>(null);
-  const reconnectAttemptsRef = useRef(0);
-  const maxReconnectAttempts = 5;
-  const reconnectDelay = 3000; // 3초
+  const reconnectCountRef = useRef(0);
+  const reconnectTimeoutRef = useRef<number>();
+  const messageQueueRef = useRef<any[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
+  
+  // 콜백을 ref에 저장하여 의존성 문제 해결
+  const onMessageRef = useRef(onMessage);
+  const onOpenRef = useRef(onOpen);
+  const onCloseRef = useRef(onClose);
+  const onErrorRef = useRef(onError);
+  
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+    onOpenRef.current = onOpen;
+    onCloseRef.current = onClose;
+    onErrorRef.current = onError;
+  }, [onMessage, onOpen, onClose, onError]);
+
+  const connect = useCallback(() => {
+    // 이미 연결되어 있거나 연결 중이면 무시
+    if (wsRef.current?.readyState === WebSocket.OPEN || 
+        wsRef.current?.readyState === WebSocket.CONNECTING) {
+      console.log('[WS] Already connected or connecting, skipping');
+      return;
+    }
+
+    console.log(`[WS] Connecting to: ${url}`);
+    
+    try {
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('[WS] Connected');
+        setIsConnected(true);
+        reconnectCountRef.current = 0;
+        
+        // 큐에 쌓인 메시지 전송
+        while (messageQueueRef.current.length > 0) {
+          const message = messageQueueRef.current.shift();
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(message));
+          }
+        }
+        
+        onOpenRef.current?.();
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          onMessageRef.current?.(data);
+        } catch (error) {
+          console.error('[WS] Failed to parse message:', error);
+        }
+      };
+
+      ws.onerror = (event) => {
+        console.error('[WS] Error:', event);
+        onErrorRef.current?.(event);
+      };
+
+      ws.onclose = (event) => {
+        console.log(`[WS] Closed: ${event.code} ${event.reason || ''}`);
+        setIsConnected(false);
+        wsRef.current = null;
+        
+        onCloseRef.current?.();
+
+        // 재연결 시도
+        if (reconnectCountRef.current < reconnectAttempts) {
+          reconnectCountRef.current++;
+          console.log(`[WS] Reconnecting... (${reconnectCountRef.current}/${reconnectAttempts})`);
+          
+          reconnectTimeoutRef.current = setTimeout(() => {
+            connect();
+          }, reconnectInterval);
+        } else {
+          console.error('[WS] Max reconnection attempts reached');
+        }
+      };
+    } catch (error) {
+      console.error('[WS] Connection error:', error);
+    }
+  }, [url, reconnectAttempts, reconnectInterval]);
+
+  const disconnect = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+    }
+    
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    
+    setIsConnected(false);
+    messageQueueRef.current = [];
+  }, []);
+
+  // send 함수는 ref를 사용하므로 의존성 없이 안정적
+  const send = useCallback((data: any) => {
+    const ws = wsRef.current;
+    
+    if (!ws) {
+      console.warn('[WS] Cannot send, WebSocket not initialized');
+      messageQueueRef.current.push(data);
+      connect();
+      return;
+    }
+
+    const readyState = ws.readyState;
+    
+    if (readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(data));
+      } catch (error) {
+        console.error('[WS] Send failed:', error);
+        messageQueueRef.current.push(data);
+      }
+    } else if (readyState === WebSocket.CONNECTING) {
+      // 연결 중이면 큐에 추가
+      messageQueueRef.current.push(data);
+      console.log('[WS] Message queued (connecting)');
+    } else {
+      console.warn(`[WS] Cannot send, connection not open (state: ${readyState})`);
+      messageQueueRef.current.push(data);
+      
+      // 연결이 끊어졌으면 재연결 시도
+      if (readyState === WebSocket.CLOSED) {
+        connect();
+      }
+    }
+  }, [connect]);
 
   useEffect(() => {
-    const isDev = import.meta.env.DEV;
-    let base = getApiBaseUrl();
+    // React Strict Mode에서 중복 연결 방지
+    let shouldConnect = true;
     
-    // WebSocket URL로 변환
-    const httpUrl = base.replace(/\/$/, '') + path;
-    const wsUrl = httpUrl.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-    
-    const connect = () => {
-      try {
-        if (isDev) console.info('[WS] Connecting to:', wsUrl);
-        
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          reconnectAttemptsRef.current = 0; // 재연결 카운터 리셋
-          if (isDev) console.info('[WS] Connected:', wsUrl);
-        };
-
-        ws.onclose = (e) => {
-          if (isDev) console.info('[WS] Closed:', e.code, e.reason);
-          
-          // 자동 재연결 (개발 모드에서만, 최대 시도 횟수 제한)
-          if (isDev && reconnectAttemptsRef.current < maxReconnectAttempts) {
-            reconnectAttemptsRef.current++;
-            console.info(`[WS] Reconnecting... (${reconnectAttemptsRef.current}/${maxReconnectAttempts})`);
-            reconnectTimeoutRef.current = setTimeout(connect, reconnectDelay);
-          }
-        };
-
-        ws.onerror = (e) => {
-          console.error('[WS] Error:', e);
-          // GitHub Codespaces에서 포트가 private일 수 있으므로 안내
-          if (base.includes('.app.github.dev')) {
-            console.warn('[WS] GitHub Codespaces 사용 중: 포트 8000이 "Public"으로 설정되어 있는지 확인하세요.');
-          }
-        };
-
-        ws.onmessage = (ev) => {
-          try {
-            onMessage(JSON.parse(ev.data));
-          } catch (err) {
-            if (isDev) console.warn('[WS] Parse error:', err);
-          }
-        };
-      } catch (err) {
-        console.error('[WS] Connection failed:', err);
+    const initConnection = () => {
+      if (shouldConnect) {
+        connect();
       }
     };
-
-    connect();
+    
+    initConnection();
 
     return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      shouldConnect = false;
+      disconnect();
     };
-  }, [path, onMessage]);
+  }, [url]); // url만 의존성으로 사용
 
-  const send = (data: any) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(data));
-    } else {
-      console.warn('[WS] Cannot send, connection not open:', wsRef.current?.readyState);
-    }
+  return {
+    send,
+    disconnect,
+    isConnected,
+    reconnect: connect,
   };
-
-  return { send };
 }

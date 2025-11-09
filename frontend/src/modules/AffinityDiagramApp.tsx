@@ -75,12 +75,15 @@ const AffinityDiagramApp: React.FC = () => {
 
   // WebSocket 연결 (고정 보드 아이디 사용: prod-board)
   const boardId = 'prod-board';
-  const { send } = useWebSocket(`/ws/board/${boardId}`, useCallback((msg: RealtimeEvent) => {
-    // 버전 필터링: 메시지에 version 있고 로컬보다 작거나 같으면 무시
-    if (typeof msg.version === 'number' && msg.type !== 'sync.state') {
-      if (msg.version <= stateVersion) return;
-    }
-    switch (msg.type) {
+  // Codespaces를 위해 동적으로 WebSocket URL 생성
+  const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/board/${boardId}`;
+  const { send, isConnected } = useWebSocket(wsUrl, {
+    onMessage: useCallback((msg: RealtimeEvent) => {
+      // 버전 필터링: 메시지에 version 있고 로컬보다 작거나 같으면 무시
+      if (typeof msg.version === 'number' && msg.type !== 'sync.state') {
+        if (msg.version <= stateVersion) return;
+      }
+      switch (msg.type) {
       case 'note.add':
         setPostits(prev => prev.find(p=>p.id===msg.note.id)? prev : [...prev, msg.note]);
         break;
@@ -118,10 +121,28 @@ const AffinityDiagramApp: React.FC = () => {
         break;
     }
     if (typeof msg.version === 'number') setStateVersion(msg.version);
-  }, []));
+  }, [stateVersion]),
+    onOpen: () => {
+      console.log('[App] WebSocket connected');
+      // 연결 시 초기 데이터 요청
+      send({ type: 'sync.request' });
+    },
+    onClose: () => {
+      console.log('[App] WebSocket disconnected');
+    },
+    onError: (error) => {
+      console.error('[App] WebSocket error:', error);
+    },
+  });
 
-  // 첫 연결 시 동기화 요청 (서버가 브로드캐스트하게)
-  useEffect(()=>{ send({ type: 'sync.request' }); }, [send]);
+  // sendWebSocketMessage - 연결 상태 확인 후 전송
+  const sendWebSocketMessage = useCallback((message: any) => {
+    if (!isConnected) {
+      console.warn('[App] Cannot send message, not connected');
+      return;
+    }
+    send(message);
+  }, [send, isConnected]);
 
   const generateId = () => {
     const t = Date.now().toString(36);
@@ -150,7 +171,7 @@ const AffinityDiagramApp: React.FC = () => {
     };
     if ((window as any).DEBUG_CREATE) console.debug('[note.create]', newPostit, rect);
     setPostits(prev => [...prev, newPostit]);
-    send({ type: 'note.add', note: newPostit });
+    sendWebSocketMessage({ type: 'note.add', note: newPostit });
   };
 
   const updateText = (id: string, text: string, opts?: { composing?: boolean }) => {
@@ -159,14 +180,14 @@ const AffinityDiagramApp: React.FC = () => {
       composingNoteRef.current = { id, value: text };
       return; // 조합 중에는 서버 전송 지연
     }
-    send({ type: 'note.update', id, text });
+    sendWebSocketMessage({ type: 'note.update', id, text });
   };
 
   const togglePin = (e: React.MouseEvent, id: string) => {
     e.preventDefault(); e.stopPropagation();
     setPostits(prev => prev.map(p => p.id === id ? { ...p, isPinned: !p.isPinned } : p));
     const target = postits.find(p=>p.id===id);
-    if (target) send({ type: 'note.pin', id, isPinned: !target.isPinned });
+    if (target) sendWebSocketMessage({ type: 'note.pin', id, isPinned: !target.isPinned });
   };
 
   // Snap
@@ -230,7 +251,7 @@ const AffinityDiagramApp: React.FC = () => {
     const payload = dragQueueRef.current;
     dragQueueRef.current = null;
     lastDragSendRef.current = performance.now();
-    send({ type: 'note.move', id: payload.id, x: payload.x, y: payload.y });
+    sendWebSocketMessage({ type: 'note.move', id: payload.id, x: payload.x, y: payload.y });
     if ((window as any).DEBUG_DRAG) console.debug('[drag] live', payload);
   };
 
@@ -287,7 +308,7 @@ const AffinityDiagramApp: React.FC = () => {
     // 확정 시 최종 state + draft 동기화 후 1회 전송
     setSectionTitles(prev => ({ ...prev, [section]: title }));
     setSectionDrafts(prev => ({ ...prev, [section]: title }));
-    send({ type: 'board.sectionTitle', section, title });
+    sendWebSocketMessage({ type: 'board.sectionTitle', section, title });
   };
 
   const renderGridLines = () => {
@@ -453,7 +474,7 @@ const AffinityDiagramApp: React.FC = () => {
 
   const handleResetBoard = () => {
     if (!confirm('보드를 초기화하시겠습니까? (모든 포스트잇과 분면 정보가 삭제됩니다)')) return;
-    send({ type: 'board.reset' });
+    sendWebSocketMessage({ type: 'board.reset' });
   };
   // 편집 대상 변경 시 draft 초기화
   useEffect(()=>{
@@ -490,6 +511,20 @@ const AffinityDiagramApp: React.FC = () => {
 
   return (
     <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
+      {/* 연결 상태 표시 */}
+      <div className="fixed top-3 right-3 z-[1000]">
+        <div className={`px-3 py-2 rounded-lg shadow-md text-sm font-medium ${
+          isConnected 
+            ? 'bg-green-50 text-green-700 border border-green-200' 
+            : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          <span className={`inline-block w-2 h-2 rounded-full mr-2 ${
+            isConnected ? 'bg-green-500' : 'bg-red-500'
+          }`} />
+          {isConnected ? 'Connected' : 'Disconnected'}
+        </div>
+      </div>
+      
       <div className="bg-white shadow-md px-4 md:px-6 py-3 flex items-center gap-3 md:gap-4">
         <h1 className="text-xl font-bold text-gray-800">어피니티 다이어그램</h1>
         <button onClick={()=>setPaletteOpen(p=>!p)} className="md:hidden ml-auto px-3 py-2 text-sm rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium">
@@ -497,10 +532,10 @@ const AffinityDiagramApp: React.FC = () => {
         </button>
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-600">분면:</span>
-          <button aria-label="분면 없음" title="분면 없음" onClick={()=>{ setGridMode('none'); send({ type: 'board.gridMode', mode: 'none' }); }} className={`p-2 rounded-lg ${gridMode==='none'?'bg-blue-100 text-blue-600':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}> <Square size={18}/> </button>
-          <button aria-label="2열 분할" title="2열" onClick={()=>{ setGridMode('2-col'); send({ type: 'board.gridMode', mode: '2-col' }); }} className={`p-2 rounded-lg ${gridMode==='2-col'?'bg-blue-100 text-blue-600':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}> <Columns2 size={18}/> </button>
-            <button aria-label="2행 분할" title="2행" onClick={()=>{ setGridMode('2-row'); send({ type: 'board.gridMode', mode: '2-row' }); }} className={`p-2 rounded-lg ${gridMode==='2-row'?'bg-blue-100 text-blue-600':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}> <Split size={18}/> </button>
-          <button aria-label="4분면" title="4분면" onClick={()=>{ setGridMode('4-grid'); send({ type: 'board.gridMode', mode: '4-grid' }); }} className={`p-2 rounded-lg ${gridMode==='4-grid'?'bg-blue-100 text-blue-600':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}> <Grid2X2 size={18}/> </button>
+          <button aria-label="분면 없음" title="분면 없음" onClick={()=>{ setGridMode('none'); sendWebSocketMessage({ type: 'board.gridMode', mode: 'none' }); }} className={`p-2 rounded-lg ${gridMode==='none'?'bg-blue-100 text-blue-600':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}> <Square size={18}/> </button>
+          <button aria-label="2열 분할" title="2열" onClick={()=>{ setGridMode('2-col'); sendWebSocketMessage({ type: 'board.gridMode', mode: '2-col' }); }} className={`p-2 rounded-lg ${gridMode==='2-col'?'bg-blue-100 text-blue-600':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}> <Columns2 size={18}/> </button>
+            <button aria-label="2행 분할" title="2행" onClick={()=>{ setGridMode('2-row'); sendWebSocketMessage({ type: 'board.gridMode', mode: '2-row' }); }} className={`p-2 rounded-lg ${gridMode==='2-row'?'bg-blue-100 text-blue-600':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}> <Split size={18}/> </button>
+          <button aria-label="4분면" title="4분면" onClick={()=>{ setGridMode('4-grid'); sendWebSocketMessage({ type: 'board.gridMode', mode: '4-grid' }); }} className={`p-2 rounded-lg ${gridMode==='4-grid'?'bg-blue-100 text-blue-600':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}> <Grid2X2 size={18}/> </button>
           <button aria-label="보드 초기화" title="Reset" onClick={handleResetBoard} className="ml-2 px-3 py-2 text-xs font-semibold rounded-md bg-red-50 text-red-600 hover:bg-red-100 border border-red-200">
             RESET
           </button>
@@ -540,7 +575,7 @@ const AffinityDiagramApp: React.FC = () => {
                     onPointerEnter={()=>setHoverId(p.id)}
                     onPointerLeave={()=>setHoverId(h=>h===p.id?null:h)}
                     onDoubleClick={e=>handleDoubleClick(e,p.id)}
-                    onMouseUp={()=>{ if(isDragging){ const moved = postits.find(n=>n.id===p.id); if(moved) send({ type:'note.move', id: p.id, x: moved.x, y: moved.y }); } }}>
+                    onMouseUp={()=>{ if(isDragging){ const moved = postits.find(n=>n.id===p.id); if(moved) sendWebSocketMessage({ type:'note.move', id: p.id, x: moved.x, y: moved.y }); } }}>
                 <div className={`min-w-32 min-h-24 p-4 rounded-lg ${colorConfig.bg} ${colorConfig.border} border-2 shadow-md relative overflow-visible ${isEditing?'ring-2 ring-blue-400 ring-opacity-50':''} ${p.isPinned?'ring-2 ring-red-400 ring-opacity-50':''}`}>
                   <button data-pin onClick={e=>togglePin(e,p.id)} className={`absolute -top-2 -right-2 w-6 h-6 rounded-full shadow-md ${p.isPinned?'bg-red-500 text-white':'bg-white text-gray-500'} hover:scale-110 transition flex items-center justify-center`} title={p.isPinned?'고정 해제':'고정하기'}>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className={p.isPinned?'':'opacity-50'}><path d="M16 12V4a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v8c0 .55-.45 1-1 1s-1 .45-1 1 .45 1 1 1h3v5a1 1 0 0 0 2 0v-5h3c.55 0 1-.45 1-1s-.45-1-1-1c-.55 0-1-.45-1-1z"/></svg>
@@ -570,7 +605,7 @@ const AffinityDiagramApp: React.FC = () => {
                                       
                                       // 300ms 후 서버 전송 (debounce)
                                       textUpdateTimerRef.current[p.id] = window.setTimeout(() => {
-                                        send({ type:'note.update', id:p.id, text:v });
+                                        sendWebSocketMessage({ type:'note.update', id:p.id, text:v });
                                       }, 300);
                                     }
                                   }}
@@ -598,7 +633,7 @@ const AffinityDiagramApp: React.FC = () => {
                                     if (textUpdateTimerRef.current[p.id]) {
                                       clearTimeout(textUpdateTimerRef.current[p.id]);
                                     }
-                                    send({ type:'note.update', id:p.id, text:v });
+                                    sendWebSocketMessage({ type:'note.update', id:p.id, text:v });
                                   }}
                                   onBlur={e=>{ 
                                     // blur 시 타이머 취소하고 즉시 전송
@@ -606,7 +641,7 @@ const AffinityDiagramApp: React.FC = () => {
                                       clearTimeout(textUpdateTimerRef.current[p.id]);
                                       delete textUpdateTimerRef.current[p.id];
                                     }
-                                    send({ type:'note.update', id:p.id, text:editingDraft }); 
+                                    sendWebSocketMessage({ type:'note.update', id:p.id, text:editingDraft }); 
                                     handleEditComplete(); 
                                     composingNoteRef.current=null; 
                                   }}
@@ -616,7 +651,7 @@ const AffinityDiagramApp: React.FC = () => {
                                       clearTimeout(textUpdateTimerRef.current[p.id]);
                                       delete textUpdateTimerRef.current[p.id];
                                     }
-                                    send({ type:'note.update', id:p.id, text:editingDraft }); 
+                                    sendWebSocketMessage({ type:'note.update', id:p.id, text:editingDraft }); 
                                     handleEditComplete(); 
                                   })}
                                   placeholder="아이디어를 입력하세요..."
