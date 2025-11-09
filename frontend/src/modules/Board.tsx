@@ -57,8 +57,9 @@ export const Board: React.FC = () => {
   };
 
   const onMove = (id: string, x: number, y: number, isDragging: boolean = false) => {
-    // Smart Guides / Snap to Edge 구현
+    // Smart Guides / Snap to Edge 구현 (Figma/Sketch 방식)
     const SNAP_THRESHOLD = 8; // Adobe/Figma 표준: 8-10px
+    const ATTACH_SPACING = 0; // 붙일 때 간격 (0 = 딱 붙임)
     const NOTE_WIDTH = 160;
     const NOTE_HEIGHT = 110;
     
@@ -67,11 +68,12 @@ export const Board: React.FC = () => {
     let snappedX: number | undefined;
     let snappedY: number | undefined;
     
-    // 모든 포스트잇의 스냅 포인트 수집
+    // 스냅 포인트 인터페이스
     interface SnapPoint {
-      value: number;
-      distance: number;
-      line: number; // 가이드라인 표시용
+      targetX: number;  // 포스트잇이 이동할 최종 X 좌표
+      distance: number; // 현재 위치에서의 거리
+      guideLine: number; // 가이드라인 표시 위치
+      type: string;     // 디버그용 타입
     }
     
     const xSnapPoints: SnapPoint[] = [];
@@ -93,66 +95,118 @@ export const Board: React.FC = () => {
       const otherBottom = other.y + NOTE_HEIGHT;
       const otherCenterY = other.y + NOTE_HEIGHT / 2;
       
-      // X축 스냅 포인트 (왼쪽, 오른쪽, 중앙 3가지)
-      // 왼쪽 → 왼쪽
-      const leftToLeft = Math.abs(currentLeft - otherLeft);
-      if (leftToLeft < SNAP_THRESHOLD) {
-        xSnapPoints.push({ value: otherLeft - currentLeft, distance: leftToLeft, line: otherLeft });
+      // ========== X축 스냅 포인트 ==========
+      
+      // 1. 왼쪽 → 왼쪽 (Left-to-Left Alignment)
+      const leftToLeftDist = Math.abs(currentLeft - otherLeft);
+      if (leftToLeftDist < SNAP_THRESHOLD) {
+        xSnapPoints.push({ 
+          targetX: otherLeft,  // ✅ 다른 포스트잇의 왼쪽에 맞춤
+          distance: leftToLeftDist, 
+          guideLine: otherLeft,
+          type: 'left-to-left'
+        });
       }
       
-      // 오른쪽 → 오른쪽
-      const rightToRight = Math.abs(currentRight - otherRight);
-      if (rightToRight < SNAP_THRESHOLD) {
-        xSnapPoints.push({ value: otherRight - currentRight, distance: rightToRight, line: otherRight });
+      // 2. 오른쪽 → 오른쪽 (Right-to-Right Alignment)
+      const rightToRightDist = Math.abs(currentRight - otherRight);
+      if (rightToRightDist < SNAP_THRESHOLD) {
+        xSnapPoints.push({ 
+          targetX: otherRight - NOTE_WIDTH,  // ✅ 오른쪽을 맞추기 위해 NOTE_WIDTH만큼 뺌
+          distance: rightToRightDist, 
+          guideLine: otherRight,
+          type: 'right-to-right'
+        });
       }
       
-      // 왼쪽 → 오른쪽 (붙이기)
-      const leftToRight = Math.abs(currentLeft - otherRight);
-      if (leftToRight < SNAP_THRESHOLD) {
-        xSnapPoints.push({ value: otherRight - currentLeft, distance: leftToRight, line: otherRight });
+      // 3. 왼쪽 → 오른쪽 붙이기 (Attach Left to Right)
+      const leftToRightDist = Math.abs(currentLeft - otherRight);
+      if (leftToRightDist < SNAP_THRESHOLD) {
+        xSnapPoints.push({ 
+          targetX: otherRight + ATTACH_SPACING,  // ✅ 다른 포스트잇 오른쪽에 딱 붙임
+          distance: leftToRightDist, 
+          guideLine: otherRight,
+          type: 'attach-left-to-right'
+        });
       }
       
-      // 오른쪽 → 왼쪽 (붙이기)
-      const rightToLeft = Math.abs(currentRight - otherLeft);
-      if (rightToLeft < SNAP_THRESHOLD) {
-        xSnapPoints.push({ value: otherLeft - currentRight, distance: rightToLeft, line: otherLeft });
+      // 4. 오른쪽 → 왼쪽 붙이기 (Attach Right to Left)
+      const rightToLeftDist = Math.abs(currentRight - otherLeft);
+      if (rightToLeftDist < SNAP_THRESHOLD) {
+        xSnapPoints.push({ 
+          targetX: otherLeft - NOTE_WIDTH - ATTACH_SPACING,  // ✅ 다른 포스트잇 왼쪽에 붙임
+          distance: rightToLeftDist, 
+          guideLine: otherLeft,
+          type: 'attach-right-to-left'
+        });
       }
       
-      // 중앙 → 중앙
-      const centerToCenter = Math.abs(currentCenterX - otherCenterX);
-      if (centerToCenter < SNAP_THRESHOLD) {
-        xSnapPoints.push({ value: otherCenterX - currentCenterX, distance: centerToCenter, line: otherCenterX });
+      // 5. 중앙 → 중앙 (Center Alignment)
+      const centerXDist = Math.abs(currentCenterX - otherCenterX);
+      if (centerXDist < SNAP_THRESHOLD) {
+        xSnapPoints.push({ 
+          targetX: otherCenterX - NOTE_WIDTH / 2,  // ✅ 중앙을 맞춤
+          distance: centerXDist, 
+          guideLine: otherCenterX,
+          type: 'center-x'
+        });
       }
       
-      // Y축 스냅 포인트 (위, 아래, 중앙 3가지)
-      // 위 → 위
-      const topToTop = Math.abs(currentTop - otherTop);
-      if (topToTop < SNAP_THRESHOLD) {
-        ySnapPoints.push({ value: otherTop - currentTop, distance: topToTop, line: otherTop });
+      // ========== Y축 스냅 포인트 ==========
+      
+      // 1. 위 → 위 (Top-to-Top Alignment)
+      const topToTopDist = Math.abs(currentTop - otherTop);
+      if (topToTopDist < SNAP_THRESHOLD) {
+        ySnapPoints.push({ 
+          targetX: otherTop,  // Y좌표이지만 targetX 필드 사용
+          distance: topToTopDist, 
+          guideLine: otherTop,
+          type: 'top-to-top'
+        });
       }
       
-      // 아래 → 아래
-      const bottomToBottom = Math.abs(currentBottom - otherBottom);
-      if (bottomToBottom < SNAP_THRESHOLD) {
-        ySnapPoints.push({ value: otherBottom - currentBottom, distance: bottomToBottom, line: otherBottom });
+      // 2. 아래 → 아래 (Bottom-to-Bottom Alignment)
+      const bottomToBottomDist = Math.abs(currentBottom - otherBottom);
+      if (bottomToBottomDist < SNAP_THRESHOLD) {
+        ySnapPoints.push({ 
+          targetX: otherBottom - NOTE_HEIGHT,  // ✅ 아래를 맞추기 위해 NOTE_HEIGHT만큼 뺌
+          distance: bottomToBottomDist, 
+          guideLine: otherBottom,
+          type: 'bottom-to-bottom'
+        });
       }
       
-      // 위 → 아래 (붙이기)
-      const topToBottom = Math.abs(currentTop - otherBottom);
-      if (topToBottom < SNAP_THRESHOLD) {
-        ySnapPoints.push({ value: otherBottom - currentTop, distance: topToBottom, line: otherBottom });
+      // 3. 위 → 아래 붙이기 (Attach Top to Bottom)
+      const topToBottomDist = Math.abs(currentTop - otherBottom);
+      if (topToBottomDist < SNAP_THRESHOLD) {
+        ySnapPoints.push({ 
+          targetX: otherBottom + ATTACH_SPACING,  // ✅ 다른 포스트잇 아래에 딱 붙임
+          distance: topToBottomDist, 
+          guideLine: otherBottom,
+          type: 'attach-top-to-bottom'
+        });
       }
       
-      // 아래 → 위 (붙이기)
-      const bottomToTop = Math.abs(currentBottom - otherTop);
-      if (bottomToTop < SNAP_THRESHOLD) {
-        ySnapPoints.push({ value: otherTop - currentBottom, distance: bottomToTop, line: otherTop });
+      // 4. 아래 → 위 붙이기 (Attach Bottom to Top)
+      const bottomToTopDist = Math.abs(currentBottom - otherTop);
+      if (bottomToTopDist < SNAP_THRESHOLD) {
+        ySnapPoints.push({ 
+          targetX: otherTop - NOTE_HEIGHT - ATTACH_SPACING,  // ✅ 다른 포스트잇 위에 붙임
+          distance: bottomToTopDist, 
+          guideLine: otherTop,
+          type: 'attach-bottom-to-top'
+        });
       }
       
-      // 중앙 → 중앙
-      const centerYToCenter = Math.abs(currentCenterY - otherCenterY);
-      if (centerYToCenter < SNAP_THRESHOLD) {
-        ySnapPoints.push({ value: otherCenterY - currentCenterY, distance: centerYToCenter, line: otherCenterY });
+      // 5. 중앙 → 중앙 (Center Alignment)
+      const centerYDist = Math.abs(currentCenterY - otherCenterY);
+      if (centerYDist < SNAP_THRESHOLD) {
+        ySnapPoints.push({ 
+          targetX: otherCenterY - NOTE_HEIGHT / 2,  // ✅ 중앙을 맞춤
+          distance: centerYDist, 
+          guideLine: otherCenterY,
+          type: 'center-y'
+        });
       }
     });
     
@@ -160,16 +214,22 @@ export const Board: React.FC = () => {
     if (xSnapPoints.length > 0) {
       xSnapPoints.sort((a, b) => a.distance - b.distance);
       const closest = xSnapPoints[0];
-      nx = x + closest.value;
-      snappedX = closest.line;
+      nx = closest.targetX;  // ✅ 계산된 최종 X 좌표 사용
+      snappedX = closest.guideLine;
+      
+      // 디버그 로그
+      console.log(`[Snap X] ${closest.type}: x=${x} → nx=${nx} (distance: ${closest.distance.toFixed(1)}px)`);
     }
     
     // 가장 가까운 Y축 스냅 포인트 적용
     if (ySnapPoints.length > 0) {
       ySnapPoints.sort((a, b) => a.distance - b.distance);
       const closest = ySnapPoints[0];
-      ny = y + closest.value;
-      snappedY = closest.line;
+      ny = closest.targetX;  // ✅ targetX 필드에 Y 좌표 저장되어 있음
+      snappedY = closest.guideLine;
+      
+      // 디버그 로그
+      console.log(`[Snap Y] ${closest.type}: y=${y} → ny=${ny} (distance: ${closest.distance.toFixed(1)}px)`);
     }
     
     // 드래그 중일 때만 가이드라인 표시
@@ -177,6 +237,11 @@ export const Board: React.FC = () => {
       setSnapGuides({ x: snappedX, y: snappedY });
     } else {
       setSnapGuides({});
+      
+      // 최종 위치 로그 (드래그 종료 시)
+      if (snappedX !== undefined || snappedY !== undefined) {
+        console.log(`[Snap Final] Position: (${nx}, ${ny})`);
+      }
     }
     
     setNotes(prev => prev.map(n => n.id === id ? { ...n, x: nx, y: ny } : n));
