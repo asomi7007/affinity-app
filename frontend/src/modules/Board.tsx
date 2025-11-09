@@ -23,6 +23,7 @@ const COLORS = ['#FFE066','#FFC6FF','#BEE1E6']; // palette primary three
 export const Board: React.FC = () => {
   const [notes, setNotes] = useState<NoteBase[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [snapGuides, setSnapGuides] = useState<{ x?: number; y?: number }>({});
   const boardRef = useRef<HTMLDivElement | null>(null);
   const { send } = useWebSocket(`/ws/board/${boardId}`, (msg: EventMessage) => {
     switch (msg.type) {
@@ -55,19 +56,86 @@ export const Board: React.FC = () => {
     send({ type: 'note.add', note });
   };
 
-  const onMove = (id: string, x: number, y: number) => {
-    // simple magnet snap: if close (<20px) to another note center on x or y, align
-    const threshold = 20;
-    const current = notes.find(n=>n.id===id);
-    let nx = x; let ny = y;
-    if (current) {
-      notes.filter(n=>n.id!==id).forEach(other => {
-        if (Math.abs(other.x - nx) < threshold) nx = other.x; // vertical align
-        if (Math.abs(other.y - ny) < threshold) ny = other.y; // horizontal align
-      });
+  const onMove = (id: string, x: number, y: number, isDragging: boolean = false) => {
+    // 스냅 정렬: 포스트잇 가장자리를 기준으로 정렬
+    const SNAP_THRESHOLD = 15; // 스냅 감지 거리
+    const NOTE_WIDTH = 160;
+    const NOTE_HEIGHT = 110; // 최소 높이
+    
+    let nx = x;
+    let ny = y;
+    let snappedX: number | undefined;
+    let snappedY: number | undefined;
+    
+    const currentLeft = x;
+    const currentRight = x + NOTE_WIDTH;
+    const currentTop = y;
+    const currentBottom = y + NOTE_HEIGHT;
+    
+    // 다른 포스트잇들과 비교하여 스냅
+    notes.filter(n => n.id !== id).forEach(other => {
+      const otherLeft = other.x;
+      const otherRight = other.x + NOTE_WIDTH;
+      const otherTop = other.y;
+      const otherBottom = other.y + NOTE_HEIGHT;
+      
+      // 수직 정렬 (좌우 가장자리 맞추기)
+      if (Math.abs(currentLeft - otherLeft) < SNAP_THRESHOLD) {
+        nx = otherLeft; // 왼쪽 가장자리 정렬
+        snappedX = otherLeft;
+      } else if (Math.abs(currentRight - otherRight) < SNAP_THRESHOLD) {
+        nx = otherRight - NOTE_WIDTH; // 오른쪽 가장자리 정렬
+        snappedX = otherRight;
+      } else if (Math.abs(currentLeft - otherRight) < SNAP_THRESHOLD) {
+        nx = otherRight; // 왼쪽이 다른 것의 오른쪽에 붙기
+        snappedX = otherRight;
+      } else if (Math.abs(currentRight - otherLeft) < SNAP_THRESHOLD) {
+        nx = otherLeft - NOTE_WIDTH; // 오른쪽이 다른 것의 왼쪽에 붙기
+        snappedX = otherLeft;
+      }
+      
+      // 수평 정렬 (상하 가장자리 맞추기)
+      if (Math.abs(currentTop - otherTop) < SNAP_THRESHOLD) {
+        ny = otherTop; // 위쪽 가장자리 정렬
+        snappedY = otherTop;
+      } else if (Math.abs(currentBottom - otherBottom) < SNAP_THRESHOLD) {
+        ny = otherBottom - NOTE_HEIGHT; // 아래쪽 가장자리 정렬
+        snappedY = otherBottom;
+      } else if (Math.abs(currentTop - otherBottom) < SNAP_THRESHOLD) {
+        ny = otherBottom; // 위쪽이 다른 것의 아래쪽에 붙기
+        snappedY = otherBottom;
+      } else if (Math.abs(currentBottom - otherTop) < SNAP_THRESHOLD) {
+        ny = otherTop - NOTE_HEIGHT; // 아래쪽이 다른 것의 위쪽에 붙기
+        snappedY = otherTop;
+      }
+      
+      // 중앙선 정렬 (보너스)
+      const currentCenterX = x + NOTE_WIDTH / 2;
+      const otherCenterX = other.x + NOTE_WIDTH / 2;
+      const currentCenterY = y + NOTE_HEIGHT / 2;
+      const otherCenterY = other.y + NOTE_HEIGHT / 2;
+      
+      if (Math.abs(currentCenterX - otherCenterX) < SNAP_THRESHOLD) {
+        nx = otherCenterX - NOTE_WIDTH / 2; // 수직 중앙선 정렬
+        snappedX = otherCenterX;
+      }
+      if (Math.abs(currentCenterY - otherCenterY) < SNAP_THRESHOLD) {
+        ny = otherCenterY - NOTE_HEIGHT / 2; // 수평 중앙선 정렬
+        snappedY = otherCenterY;
+      }
+    });
+    
+    // 드래그 중일 때만 가이드라인 표시
+    if (isDragging) {
+      setSnapGuides({ x: snappedX, y: snappedY });
+    } else {
+      setSnapGuides({});
     }
+    
     setNotes(prev => prev.map(n => n.id === id ? { ...n, x: nx, y: ny } : n));
-    send({ type: 'note.move', note: { id, x: nx, y: ny }});
+    if (!isDragging) {
+      send({ type: 'note.move', note: { id, x: nx, y: ny }});
+    }
   };
 
   const onUpdateText = (id: string, text: string) => {
@@ -111,6 +179,35 @@ export const Board: React.FC = () => {
         }}
       >
         <div style={{position:'absolute', inset:0, backgroundImage:'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize:'40px 40px'}} />
+        
+        {/* 스냅 가이드라인 */}
+        {snapGuides.x !== undefined && (
+          <div style={{
+            position: 'absolute',
+            left: snapGuides.x,
+            top: 0,
+            bottom: 0,
+            width: 2,
+            background: 'rgba(0, 200, 255, 0.6)',
+            boxShadow: '0 0 8px rgba(0, 200, 255, 0.8)',
+            pointerEvents: 'none',
+            zIndex: 998
+          }} />
+        )}
+        {snapGuides.y !== undefined && (
+          <div style={{
+            position: 'absolute',
+            top: snapGuides.y,
+            left: 0,
+            right: 0,
+            height: 2,
+            background: 'rgba(0, 200, 255, 0.6)',
+            boxShadow: '0 0 8px rgba(0, 200, 255, 0.8)',
+            pointerEvents: 'none',
+            zIndex: 998
+          }} />
+        )}
+        
         {notes.map(n => (
           <StickyNote key={n.id} note={n} onMove={onMove} onUpdateText={onUpdateText} editing={editingId===n.id} onEndEdit={onEndEdit} />
         ))}
