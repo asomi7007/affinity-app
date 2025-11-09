@@ -484,33 +484,55 @@ create_service_principal() {
         log_success "Contributor 역할이 이미 부여되어 있습니다"
     fi
     
-    # Federated Credential 생성
-    log_info "Federated Credential 생성 중..."
+    # Federated Credentials 생성 (여러 개)
+    log_info "Federated Credentials 생성 중..."
     
-    CREDENTIAL_NAME="github-${REPO_NAME}-main"
-    SUBJECT="repo:${REPO_FULL}:ref:refs/heads/main"
+    # 1. Main 브랜치용 Credential
+    CREDENTIAL_NAME_MAIN="github-${REPO_NAME}-main"
+    SUBJECT_MAIN="repo:${REPO_FULL}:ref:refs/heads/main"
     
-    # 기존 credential 삭제 (있으면)
-    CRED_EXISTS=$(az ad app federated-credential list --id "$APP_ID" \
-        --query "[?name=='$CREDENTIAL_NAME'].id" -o tsv 2>/dev/null || echo "")
+    # 2. Production Environment용 Credential
+    CREDENTIAL_NAME_PROD="github-${REPO_NAME}-prod-env"
+    SUBJECT_PROD="repo:${REPO_FULL}:environment:production"
     
-    if [ -n "$CRED_EXISTS" ]; then
-        log_info "기존 Federated Credential 삭제 중..."
-        az ad app federated-credential delete --id "$APP_ID" --federated-credential-id "$CRED_EXISTS" 2>/dev/null
-    fi
+    # 3. Staging Environment용 Credential (선택사항)
+    CREDENTIAL_NAME_STAGING="github-${REPO_NAME}-staging-env"
+    SUBJECT_STAGING="repo:${REPO_FULL}:environment:staging"
     
-    # 새 credential 생성
-    az ad app federated-credential create \
-        --id "$APP_ID" \
-        --parameters "{
-            \"name\": \"$CREDENTIAL_NAME\",
-            \"issuer\": \"https://token.actions.githubusercontent.com\",
-            \"subject\": \"$SUBJECT\",
-            \"description\": \"GitHub Actions for ${REPO_FULL} main branch\",
-            \"audiences\": [\"api://AzureADTokenExchange\"]
-        }" --output none
+    # 기존 credentials 확인 및 생성
+    create_federated_credential() {
+        local cred_name=$1
+        local subject=$2
+        local description=$3
+        
+        # 기존 credential 확인
+        CRED_EXISTS=$(az ad app federated-credential list --id "$APP_ID" \
+            --query "[?name=='$cred_name'].id" -o tsv 2>/dev/null || echo "")
+        
+        if [ -n "$CRED_EXISTS" ]; then
+            log_info "기존 '$cred_name' Credential 삭제 중..."
+            az ad app federated-credential delete --id "$APP_ID" --federated-credential-id "$CRED_EXISTS" 2>/dev/null
+        fi
+        
+        # 새 credential 생성
+        log_info "생성 중: $cred_name (subject: $subject)"
+        az ad app federated-credential create \
+            --id "$APP_ID" \
+            --parameters "{
+                \"name\": \"$cred_name\",
+                \"issuer\": \"https://token.actions.githubusercontent.com\",
+                \"subject\": \"$subject\",
+                \"description\": \"$description\",
+                \"audiences\": [\"api://AzureADTokenExchange\"]
+            }" --output none
+    }
     
-    log_success "Federated Credential 생성 완료"
+    # 각 Credential 생성
+    create_federated_credential "$CREDENTIAL_NAME_MAIN" "$SUBJECT_MAIN" "GitHub Actions for ${REPO_FULL} main branch"
+    create_federated_credential "$CREDENTIAL_NAME_PROD" "$SUBJECT_PROD" "GitHub Actions for ${REPO_FULL} production environment"
+    create_federated_credential "$CREDENTIAL_NAME_STAGING" "$SUBJECT_STAGING" "GitHub Actions for ${REPO_FULL} staging environment"
+    
+    log_success "모든 Federated Credentials 생성 완료 (main, production, staging)"
     
     # Tenant ID 가져오기
     TENANT_ID=$(az account show --query tenantId -o tsv)
