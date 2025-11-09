@@ -79,49 +79,72 @@ export const Board: React.FC = () => {
       const otherTop = other.y;
       const otherBottom = other.y + NOTE_HEIGHT;
       
-      // 수직 정렬 (좌우 가장자리 맞추기)
-      if (Math.abs(currentLeft - otherLeft) < SNAP_THRESHOLD) {
-        nx = otherLeft; // 왼쪽 가장자리 정렬
+      // X축 정렬 (수직 방향 - 좌우 정렬)
+      let xSnapped = false;
+      
+      // 왼쪽 가장자리 정렬
+      if (!xSnapped && Math.abs(currentLeft - otherLeft) < SNAP_THRESHOLD) {
+        nx = otherLeft;
         snappedX = otherLeft;
-      } else if (Math.abs(currentRight - otherRight) < SNAP_THRESHOLD) {
-        nx = otherRight - NOTE_WIDTH; // 오른쪽 가장자리 정렬
+        xSnapped = true;
+      }
+      // 오른쪽 가장자리 정렬
+      if (!xSnapped && Math.abs(currentRight - otherRight) < SNAP_THRESHOLD) {
+        nx = otherRight - NOTE_WIDTH;
         snappedX = otherRight;
-      } else if (Math.abs(currentLeft - otherRight) < SNAP_THRESHOLD) {
-        nx = otherRight; // 왼쪽이 다른 것의 오른쪽에 붙기
+        xSnapped = true;
+      }
+      // 왼쪽이 다른 것의 오른쪽에 붙기
+      if (!xSnapped && Math.abs(currentLeft - otherRight) < SNAP_THRESHOLD) {
+        nx = otherRight;
         snappedX = otherRight;
-      } else if (Math.abs(currentRight - otherLeft) < SNAP_THRESHOLD) {
-        nx = otherLeft - NOTE_WIDTH; // 오른쪽이 다른 것의 왼쪽에 붙기
+        xSnapped = true;
+      }
+      // 오른쪽이 다른 것의 왼쪽에 붙기
+      if (!xSnapped && Math.abs(currentRight - otherLeft) < SNAP_THRESHOLD) {
+        nx = otherLeft - NOTE_WIDTH;
         snappedX = otherLeft;
+        xSnapped = true;
+      }
+      // 수직 중앙선 정렬
+      if (!xSnapped && Math.abs((x + NOTE_WIDTH / 2) - (other.x + NOTE_WIDTH / 2)) < SNAP_THRESHOLD) {
+        nx = other.x + NOTE_WIDTH / 2 - NOTE_WIDTH / 2;
+        snappedX = other.x + NOTE_WIDTH / 2;
+        xSnapped = true;
       }
       
-      // 수평 정렬 (상하 가장자리 맞추기)
-      if (Math.abs(currentTop - otherTop) < SNAP_THRESHOLD) {
-        ny = otherTop; // 위쪽 가장자리 정렬
+      // Y축 정렬 (수평 방향 - 상하 정렬)
+      let ySnapped = false;
+      
+      // 위쪽 가장자리 정렬
+      if (!ySnapped && Math.abs(currentTop - otherTop) < SNAP_THRESHOLD) {
+        ny = otherTop;
         snappedY = otherTop;
-      } else if (Math.abs(currentBottom - otherBottom) < SNAP_THRESHOLD) {
-        ny = otherBottom - NOTE_HEIGHT; // 아래쪽 가장자리 정렬
+        ySnapped = true;
+      }
+      // 아래쪽 가장자리 정렬
+      if (!ySnapped && Math.abs(currentBottom - otherBottom) < SNAP_THRESHOLD) {
+        ny = otherBottom - NOTE_HEIGHT;
         snappedY = otherBottom;
-      } else if (Math.abs(currentTop - otherBottom) < SNAP_THRESHOLD) {
-        ny = otherBottom; // 위쪽이 다른 것의 아래쪽에 붙기
+        ySnapped = true;
+      }
+      // 위쪽이 다른 것의 아래쪽에 붙기
+      if (!ySnapped && Math.abs(currentTop - otherBottom) < SNAP_THRESHOLD) {
+        ny = otherBottom;
         snappedY = otherBottom;
-      } else if (Math.abs(currentBottom - otherTop) < SNAP_THRESHOLD) {
-        ny = otherTop - NOTE_HEIGHT; // 아래쪽이 다른 것의 위쪽에 붙기
+        ySnapped = true;
+      }
+      // 아래쪽이 다른 것의 위쪽에 붙기
+      if (!ySnapped && Math.abs(currentBottom - otherTop) < SNAP_THRESHOLD) {
+        ny = otherTop - NOTE_HEIGHT;
         snappedY = otherTop;
+        ySnapped = true;
       }
-      
-      // 중앙선 정렬 (보너스)
-      const currentCenterX = x + NOTE_WIDTH / 2;
-      const otherCenterX = other.x + NOTE_WIDTH / 2;
-      const currentCenterY = y + NOTE_HEIGHT / 2;
-      const otherCenterY = other.y + NOTE_HEIGHT / 2;
-      
-      if (Math.abs(currentCenterX - otherCenterX) < SNAP_THRESHOLD) {
-        nx = otherCenterX - NOTE_WIDTH / 2; // 수직 중앙선 정렬
-        snappedX = otherCenterX;
-      }
-      if (Math.abs(currentCenterY - otherCenterY) < SNAP_THRESHOLD) {
-        ny = otherCenterY - NOTE_HEIGHT / 2; // 수평 중앙선 정렬
-        snappedY = otherCenterY;
+      // 수평 중앙선 정렬
+      if (!ySnapped && Math.abs((y + NOTE_HEIGHT / 2) - (other.y + NOTE_HEIGHT / 2)) < SNAP_THRESHOLD) {
+        ny = other.y + NOTE_HEIGHT / 2 - NOTE_HEIGHT / 2;
+        snappedY = other.y + NOTE_HEIGHT / 2;
+        ySnapped = true;
       }
     });
     
