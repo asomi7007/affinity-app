@@ -19,6 +19,7 @@ KEY="🔑"
 INFO="ℹ️"
 WARN="⚠️"
 CELEBRATE="🎉"
+LOCK="🔒"
 
 # 로그 함수
 log_info() {
@@ -84,6 +85,18 @@ prompt_confirm() {
     else
         [[ "$answer" =~ ^[Yy] ]]
     fi
+}
+
+# 비밀 입력 받기 (화면에 표시 안됨)
+prompt_secret() {
+    local prompt_text=$1
+    local result_var=$2
+    
+    echo -e -n "${CYAN}${prompt_text}${NC}: "
+    read -s user_input
+    echo
+    
+    eval $result_var="'$user_input'"
 }
 
 # Azure CLI 설치 확인 및 설치
@@ -152,7 +165,8 @@ azure_login() {
         log_success "이미 Azure에 로그인되어 있습니다."
         echo ""
         echo -e "${CYAN}현재 계정:${NC}"
-        echo "$CURRENT_ACCOUNT" | jq -r '. | "  이름: \(.Name)\n  구독 ID: \(.ID)"'
+        echo "$CURRENT_ACCOUNT" | jq -r '. | "  이름: \(.Name)\n  구독 ID: \(.ID)"' 2>/dev/null || \
+            echo "$CURRENT_ACCOUNT"
         echo ""
         
         if ! prompt_confirm "다른 계정으로 로그인하시겠습니까?" false; then
@@ -163,8 +177,6 @@ azure_login() {
     log_info "브라우저가 열립니다. Azure 계정으로 로그인해주세요."
     echo ""
     
-    # --use-device-code 제거하여 새로운 대화형 로그인 사용
-    # Azure CLI 2.30.0 이상은 자동으로 구독 선택 UI 제공
     if az login --only-show-errors; then
         log_success "Azure 로그인 성공!"
     else
@@ -173,7 +185,7 @@ azure_login() {
     fi
 }
 
-# 구독 선택 (Azure CLI의 대화형 선택 사용)
+# 구독 선택
 select_subscription() {
     log_header "${GEAR} Azure 구독 확인"
     
@@ -271,7 +283,7 @@ configure_resources() {
     
     # 리소스 그룹 이름 자동 생성
     TIMESTAMP=$(date +%Y%m%d)
-    RANDOM_SUFFIX=$(openssl rand -hex 2)
+    RANDOM_SUFFIX=$(openssl rand -hex 2 2>/dev/null || echo "$(date +%s | tail -c 5)")
     DEFAULT_RG="${PROJECT_NAME}-rg-${TIMESTAMP}-${RANDOM_SUFFIX}"
     
     prompt_input "리소스 그룹 이름" "$DEFAULT_RG" RESOURCE_GROUP
@@ -508,13 +520,254 @@ create_service_principal() {
     export APP_NAME
 }
 
-# GitHub Secrets 설정 가이드
-show_github_secrets() {
+# GitHub Personal Access Token 확인/생성
+setup_github_pat() {
+    log_header "${LOCK} GitHub Personal Access Token 설정"
+    
+    # 환경 변수로 이미 제공된 경우
+    if [ -n "$GITHUB_PAT" ]; then
+        log_success "환경 변수에서 GITHUB_PAT를 찾았습니다."
+        return 0
+    fi
+    
+    echo ""
+    log_info "GitHub Secrets를 자동으로 설정하려면 Personal Access Token이 필요합니다."
+    echo ""
+    echo -e "${YELLOW}필요한 권한:${NC}"
+    echo "  • repo (전체 저장소 접근)"
+    echo "  • workflow (GitHub Actions 워크플로우 수정)"
+    echo ""
+    echo -e "${CYAN}TIP: 환경 변수로 제공할 수도 있습니다:${NC}"
+    echo -e "  ${GREEN}export GITHUB_PAT=ghp_your_token_here${NC}"
+    echo ""
+    
+    # PAT 파일 확인 (이전에 저장한 경우)
+    PAT_FILE="${HOME}/.github_pat_affinity"
+    if [ -f "$PAT_FILE" ]; then
+        STORED_PAT=$(cat "$PAT_FILE" 2>/dev/null)
+        if [ -n "$STORED_PAT" ]; then
+            log_info "저장된 PAT를 찾았습니다."
+            if prompt_confirm "저장된 PAT를 사용하시겠습니까?" true; then
+                GITHUB_PAT="$STORED_PAT"
+                export GITHUB_PAT
+                return 0
+            fi
+        fi
+    fi
+    
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}${YELLOW}GitHub Personal Access Token 생성 방법:${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "1. GitHub 접속: https://github.com/settings/tokens/new"
+    echo "2. Note: 'Affinity App CI/CD' (원하는 이름)"
+    echo "3. Expiration: 90 days (또는 원하는 기간)"
+    echo "4. Select scopes:"
+    echo "   ☑ repo (전체 체크)"
+    echo "   ☑ workflow"
+    echo "5. 'Generate token' 클릭"
+    echo "6. 생성된 토큰 복사 (한 번만 표시됨!)"
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    # 브라우저 열기 옵션
+    if prompt_confirm "브라우저에서 GitHub Token 페이지를 열까요?" true; then
+        # 다양한 방법으로 브라우저 열기 시도
+        if [ -n "$BROWSER" ]; then
+            "$BROWSER" "https://github.com/settings/tokens/new" 2>/dev/null &
+        elif command -v xdg-open &> /dev/null; then
+            xdg-open "https://github.com/settings/tokens/new" 2>/dev/null &
+        elif command -v open &> /dev/null; then
+            open "https://github.com/settings/tokens/new" 2>/dev/null &
+        elif command -v start &> /dev/null; then
+            start "https://github.com/settings/tokens/new" 2>/dev/null &
+        else
+            log_warn "브라우저를 자동으로 열 수 없습니다. 위 URL을 직접 방문해주세요."
+        fi
+        
+        echo ""
+        log_info "브라우저에서 토큰을 생성한 후 아래에 붙여넣어주세요."
+    fi
+    
+    echo ""
+    echo -e "${CYAN}GitHub Personal Access Token을 입력하세요 (ghp_로 시작):${NC}"
+    echo -e "${YELLOW}⚠️ 입력 시 화면에 표시됩니다. 주변을 확인하세요!${NC}"
+    echo -n "> "
+    
+    # read -s 대신 일반 read 사용 (Codespaces에서 더 잘 작동)
+    read GITHUB_PAT
+    
+    # 입력 후 화면 정리
+    clear
+    log_header "${LOCK} GitHub Personal Access Token 설정"
+    
+    if [ -z "$GITHUB_PAT" ]; then
+        log_warn "PAT가 입력되지 않았습니다. GitHub Secrets를 수동으로 설정해야 합니다."
+        return 1
+    fi
+    
+    # PAT 형식 확인
+    if [[ ! "$GITHUB_PAT" =~ ^ghp_ ]]; then
+        log_warn "PAT가 'ghp_'로 시작하지 않습니다. 올바른 토큰인지 확인하세요."
+    fi
+    
+    # PAT 검증
+    log_info "PAT 검증 중..."
+    RESPONSE=$(curl -s -H "Authorization: token $GITHUB_PAT" https://api.github.com/user)
+    
+    if echo "$RESPONSE" | grep -q "\"login\""; then
+        USERNAME=$(echo "$RESPONSE" | jq -r '.login' 2>/dev/null || echo "Unknown")
+        log_success "PAT 검증 성공! GitHub 사용자: $USERNAME"
+        
+        # PAT 저장 옵션
+        if prompt_confirm "이 PAT를 안전하게 저장하시겠습니까? (다음에 재사용 가능)" false; then
+            echo "$GITHUB_PAT" > "$PAT_FILE"
+            chmod 600 "$PAT_FILE"
+            log_success "PAT가 안전하게 저장되었습니다: $PAT_FILE"
+        fi
+        
+        export GITHUB_PAT
+        return 0
+    else
+        log_error "PAT 검증 실패. 올바른 토큰인지 확인해주세요."
+        echo ""
+        log_info "응답 내용:"
+        echo "$RESPONSE" | head -5
+        return 1
+    fi
+}
+
+# GitHub Secrets 자동 설정 (REST API 사용)
+set_github_secrets_with_api() {
+    log_info "GitHub Secrets 자동 설정 중 (REST API 사용)..."
+    
+    # 저장소 공개 키 가져오기
+    PUBLIC_KEY_RESPONSE=$(curl -s -H "Authorization: token $GITHUB_PAT" \
+        "https://api.github.com/repos/${REPO_FULL}/actions/secrets/public-key")
+    
+    if echo "$PUBLIC_KEY_RESPONSE" | grep -q "\"key\""; then
+        PUBLIC_KEY=$(echo "$PUBLIC_KEY_RESPONSE" | jq -r '.key')
+        KEY_ID=$(echo "$PUBLIC_KEY_RESPONSE" | jq -r '.key_id')
+        
+        log_success "저장소 공개 키 획득 완료"
+        
+        # Python 스크립트로 암호화 및 설정
+        python3 << EOF
+import base64
+import json
+import subprocess
+from nacl import encoding, public
+
+def encrypt_secret(public_key: str, secret_value: str) -> str:
+    """Encrypt a secret using libsodium."""
+    public_key = public.PublicKey(public_key.encode("utf-8"), encoding.Base64Encoder())
+    sealed_box = public.SealedBox(public_key)
+    encrypted = sealed_box.encrypt(secret_value.encode("utf-8"))
+    return base64.b64encode(encrypted).decode("utf-8")
+
+def set_secret(repo, token, secret_name, secret_value, key_id, public_key):
+    """Set a GitHub secret using REST API."""
+    encrypted_value = encrypt_secret(public_key, secret_value)
+    
+    url = f"https://api.github.com/repos/{repo}/actions/secrets/{secret_name}"
+    
+    data = {
+        "encrypted_value": encrypted_value,
+        "key_id": key_id
+    }
+    
+    cmd = [
+        "curl", "-X", "PUT",
+        "-H", f"Authorization: token {token}",
+        "-H", "Accept: application/vnd.github.v3+json",
+        "-d", json.dumps(data),
+        url
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0
+
+# Secrets to set
+secrets = {
+    "AZURE_CLIENT_ID": "${APP_ID}",
+    "AZURE_TENANT_ID": "${TENANT_ID}",
+    "AZURE_SUBSCRIPTION_ID": "${SUBSCRIPTION_ID}",
+    "AZURE_RESOURCE_GROUP": "${RESOURCE_GROUP}",
+    "AZURE_CONTAINER_APP_NAME": "${CONTAINER_APP_NAME}",
+    "AZURE_CONTAINER_APP_ENV": "${CONTAINER_APP_ENV}",
+    "AZURE_LOCATION": "${LOCATION}"
+}
+
+try:
+    import nacl
+except ImportError:
+    print("Installing PyNaCl...")
+    import subprocess
+    subprocess.run(["pip3", "install", "pynacl", "--quiet"], check=True)
+    import nacl
+
+success_count = 0
+for name, value in secrets.items():
+    if set_secret("${REPO_FULL}", "${GITHUB_PAT}", name, value, "${KEY_ID}", "${PUBLIC_KEY}"):
+        print(f"✅ {name} 설정 완료")
+        success_count += 1
+    else:
+        print(f"❌ {name} 설정 실패")
+
+if success_count == len(secrets):
+    print(f"\n✅ 모든 GitHub Secrets 설정 완료! ({success_count}/{len(secrets)})")
+else:
+    print(f"\n⚠️ 일부 Secrets 설정 실패 ({success_count}/{len(secrets)})")
+EOF
+        
+        if [ $? -eq 0 ]; then
+            echo ""
+            log_success "GitHub Secrets 자동 설정 완료!"
+            echo ""
+            log_info "확인: https://github.com/${REPO_FULL}/settings/secrets/actions"
+            return 0
+        else
+            log_error "Secrets 설정 중 일부 오류가 발생했습니다."
+            return 1
+        fi
+    else
+        log_error "저장소 공개 키를 가져올 수 없습니다. 권한을 확인해주세요."
+        return 1
+    fi
+}
+
+# GitHub Secrets 설정 (통합)
+setup_github_secrets() {
     log_header "${CELEBRATE} GitHub Secrets 설정"
     
     echo ""
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BOLD}${CYAN}다음 값들을 GitHub Secrets에 저장하세요!${NC}"
+    echo -e "${BOLD}${CYAN}GitHub Secrets 설정 방법을 선택하세요${NC}"
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "1) 자동 설정 (Personal Access Token 필요)"
+    echo "2) 수동 설정 (값만 표시)"
+    echo ""
+    
+    prompt_input "선택 (1 또는 2)" "1" SETUP_METHOD
+    
+    if [ "$SETUP_METHOD" = "1" ]; then
+        # PAT 설정 시도
+        if setup_github_pat; then
+            # API를 사용한 자동 설정
+            if set_github_secrets_with_api; then
+                return 0
+            else
+                log_warn "자동 설정 실패. 수동 설정 가이드를 표시합니다."
+            fi
+        fi
+    fi
+    
+    # 수동 설정 가이드
+    echo ""
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}${CYAN}다음 값들을 GitHub Secrets에 수동으로 저장하세요!${NC}"
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo -e "${YELLOW}GitHub 저장소 → Settings → Secrets and variables → Actions → New repository secret${NC}"
@@ -536,11 +789,15 @@ EOF
     
     echo ""
     
-    # 설정 파일로 저장
+    # 설정 파일을 임시로 저장 (Git에는 추가하지 않음)
+    # 이 파일은 스크립트 실행 중에만 사용되며, .gitignore에 포함되어 있습니다.
     CONFIG_FILE=".azure-cicd-config"
+    log_warn "민감한 정보를 포함한 설정 파일은 Git에 추가되지 않습니다."
+    
     cat > "$CONFIG_FILE" << EOF
-# Azure CI/CD 설정 정보
+# Azure CI/CD 설정 정보 (로컬 전용 - Git에 커밋하지 마세요!)
 # 생성 날짜: $(date)
+# 이 파일은 .gitignore에 포함되어 있습니다.
 
 # GitHub 저장소
 REPO_OWNER="${REPO_OWNER}"
@@ -566,7 +823,7 @@ CONTAINER_IMAGE="${CONTAINER_IMAGE}"
 APP_ID="${APP_ID}"
 APP_NAME="${APP_NAME}"
 
-# GitHub Secrets (복사해서 사용)
+# GitHub Secrets (자동으로 설정됨)
 # AZURE_CLIENT_ID: ${APP_ID}
 # AZURE_TENANT_ID: ${TENANT_ID}
 # AZURE_SUBSCRIPTION_ID: ${SUBSCRIPTION_ID}
@@ -576,41 +833,8 @@ APP_NAME="${APP_NAME}"
 # AZURE_LOCATION: ${LOCATION}
 EOF
     
-    log_success "설정 정보가 ${CONFIG_FILE} 파일에 저장되었습니다."
+    log_info "설정 정보가 ${CONFIG_FILE} 파일에 임시 저장되었습니다. (Git에는 추가되지 않음)"
     echo ""
-    
-    # GitHub CLI로 자동 설정 제안
-    if command -v gh &> /dev/null && gh auth status &> /dev/null; then
-        echo ""
-        if prompt_confirm "GitHub CLI를 사용하여 자동으로 Secrets를 설정하시겠습니까?" true; then
-            set_github_secrets_automatically
-        else
-            log_info "수동으로 GitHub Secrets를 설정해주세요."
-        fi
-    else
-        log_warn "GitHub CLI가 로그인되어 있지 않습니다. 수동으로 Secrets를 설정해주세요."
-    fi
-}
-
-# GitHub Secrets 자동 설정 (GitHub CLI 사용)
-set_github_secrets_automatically() {
-    log_info "GitHub Secrets 자동 설정 중..."
-    
-    gh secret set AZURE_CLIENT_ID --body "$APP_ID" --repo "$REPO_FULL" && \
-    gh secret set AZURE_TENANT_ID --body "$TENANT_ID" --repo "$REPO_FULL" && \
-    gh secret set AZURE_SUBSCRIPTION_ID --body "$SUBSCRIPTION_ID" --repo "$REPO_FULL" && \
-    gh secret set AZURE_RESOURCE_GROUP --body "$RESOURCE_GROUP" --repo "$REPO_FULL" && \
-    gh secret set AZURE_CONTAINER_APP_NAME --body "$CONTAINER_APP_NAME" --repo "$REPO_FULL" && \
-    gh secret set AZURE_CONTAINER_APP_ENV --body "$CONTAINER_APP_ENV" --repo "$REPO_FULL" && \
-    gh secret set AZURE_LOCATION --body "$LOCATION" --repo "$REPO_FULL"
-    
-    if [ $? -eq 0 ]; then
-        log_success "GitHub Secrets 자동 설정 완료!"
-        echo ""
-        log_info "확인: https://github.com/${REPO_FULL}/settings/secrets/actions"
-    else
-        log_error "GitHub Secrets 자동 설정 실패. 수동으로 설정해주세요."
-    fi
 }
 
 # 최종 안내
@@ -658,18 +882,13 @@ show_final_instructions() {
     
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BOLD}${CYAN}📚 다음 단계 (앱 수정 및 배포)${NC}"
+    echo -e "${BOLD}${CYAN}📚 다음 단계${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo -e "${YELLOW}1️⃣ GitHub Secrets 확인${NC}"
     echo "   https://github.com/${REPO_FULL}/settings/secrets/actions"
     echo ""
     echo -e "${YELLOW}2️⃣ 코드 수정 후 자동 배포${NC}"
-    echo -e "   ${GREEN}좌측 채팅창에서 GitHub Copilot에게:${NC}"
-    echo ""
-    echo -e "   ${BLUE}\"코드 수정했어. git add, commit, push 해줘\"${NC}"
-    echo ""
-    echo -e "   ${GREEN}또는 직접 터미널에서:${NC}"
     echo -e "   ${BLUE}git add .${NC}"
     echo -e "   ${BLUE}git commit -m \"feat: 새 기능 추가\"${NC}"
     echo -e "   ${BLUE}git push origin main${NC}"
@@ -694,7 +913,7 @@ main() {
     cat << "EOF"
     ╔═══════════════════════════════════════════════════════════╗
     ║                                                           ║
-    ║        Azure CI/CD 자동 설정 스크립트                     ║
+    ║        Azure CI/CD 자동 설정 스크립트 v2.0               ║
     ║        Affinity Diagram App                               ║
     ║                                                           ║
     ╚═══════════════════════════════════════════════════════════╝
@@ -702,6 +921,7 @@ EOF
     echo -e "${NC}"
     echo ""
     log_info "이 스크립트는 GitHub Actions를 통한 Azure Container Apps 자동 배포를 설정합니다."
+    echo -e "${GREEN}✨ 개선사항: GitHub Secrets 자동 설정 기능 추가!${NC}"
     echo ""
     
     if ! prompt_confirm "설정을 시작하시겠습니까?" true; then
@@ -717,7 +937,7 @@ EOF
     configure_resources
     create_resource_group
     create_service_principal
-    show_github_secrets
+    setup_github_secrets
     show_final_instructions
     
     echo ""
