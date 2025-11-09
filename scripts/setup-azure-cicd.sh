@@ -542,82 +542,126 @@ create_service_principal() {
     export APP_NAME
 }
 
-# GitHub Personal Access Token 확인/생성
-setup_github_pat() {
-    log_header "${LOCK} GitHub Personal Access Token 설정"
+# GitHub Personal Access Token 테스트
+test_github_token() {
+    local token=$1
     
-    # 환경 변수로 이미 제공된 경우
-    if [ -n "$GITHUB_PAT" ]; then
-        log_success "환경 변수에서 GITHUB_PAT를 찾았습니다."
-        return 0
-    fi
+    log_info "토큰 검증 중..."
     
-    echo ""
-    log_info "GitHub Secrets를 자동으로 설정하려면 Personal Access Token이 필요합니다."
-    echo ""
-    echo -e "${YELLOW}필요한 권한:${NC}"
-    echo "  • repo (전체 저장소 접근)"
-    echo "  • workflow (GitHub Actions 워크플로우 수정)"
-    echo ""
-    echo -e "${CYAN}TIP: 환경 변수로 제공할 수도 있습니다:${NC}"
-    echo -e "  ${GREEN}export GITHUB_PAT=ghp_your_token_here${NC}"
-    echo ""
+    # GitHub API로 토큰 테스트
+    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -H "Authorization: token $token" \
+        https://api.github.com/user)
     
-    # PAT 파일 확인 (이전에 저장한 경우)
-    PAT_FILE="${HOME}/.github_pat_affinity"
-    if [ -f "$PAT_FILE" ]; then
-        STORED_PAT=$(cat "$PAT_FILE" 2>/dev/null)
-        if [ -n "$STORED_PAT" ]; then
-            log_info "저장된 PAT를 찾았습니다."
-            if prompt_confirm "저장된 PAT를 사용하시겠습니까?" true; then
-                GITHUB_PAT="$STORED_PAT"
-                export GITHUB_PAT
-                return 0
-            fi
+    if [ "$response" -eq 200 ]; then
+        # 사용자 정보 가져오기
+        local user_info=$(curl -s -H "Authorization: token $token" https://api.github.com/user)
+        local username=$(echo "$user_info" | jq -r '.login' 2>/dev/null || echo "Unknown")
+        
+        log_success "토큰 검증 성공! GitHub 사용자: $username"
+        
+        # 권한 확인
+        local scopes=$(curl -s -I -H "Authorization: token $token" https://api.github.com/user 2>/dev/null | grep -i x-oauth-scopes | cut -d' ' -f2-)
+        if [ -n "$scopes" ]; then
+            echo -e "${GREEN}${CHECK} 토큰 권한: $scopes${NC}"
         fi
+        
+        return 0
+    else
+        log_error "토큰 검증 실패 (HTTP $response)"
+        return 1
+    fi
+}
+
+# GitHub Device Flow 인증
+setup_with_device_flow() {
+    log_info "GitHub CLI를 통한 Device Flow 인증을 시작합니다..."
+    echo ""
+    
+    # gh CLI 설치 확인
+    if ! command -v gh &> /dev/null; then
+        log_warn "GitHub CLI가 설치되어 있지 않습니다."
+        return 1
     fi
     
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BOLD}${YELLOW}GitHub Personal Access Token 생성 방법:${NC}"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    # gh auth login with device flow
+    gh auth login --web --scopes "repo,workflow"
+    
+    if [ $? -eq 0 ]; then
+        log_success "GitHub CLI 인증 완료"
+        
+        # 토큰 추출
+        GITHUB_PAT=$(gh auth token 2>/dev/null)
+        
+        if [ -n "$GITHUB_PAT" ]; then
+            log_success "토큰 획득 성공"
+            export GITHUB_PAT
+            return 0
+        else
+            log_error "토큰 획득 실패"
+            return 1
+        fi
+    else
+        log_error "인증 실패"
+        return 1
+    fi
+}
+
+# 수동 토큰 입력
+manual_token_input() {
     echo ""
-    echo "1. GitHub 접속: https://github.com/settings/tokens/new"
-    echo "2. Note: 'Affinity App CI/CD' (원하는 이름)"
-    echo "3. Expiration: 90 days (또는 원하는 기간)"
-    echo "4. Select scopes:"
-    echo "   ☑ repo (전체 체크)"
-    echo "   ☑ workflow"
-    echo "5. 'Generate token' 클릭"
-    echo "6. 생성된 토큰 복사 (한 번만 표시됨!)"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}${YELLOW}GitHub Personal Access Token 생성 가이드${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    
+    echo -e "${GREEN}Step 1: 새 브라우저 탭에서 GitHub 설정 페이지를 엽니다${NC}"
+    echo -e "        아래 URL을 Ctrl+Click하여 열기:"
+    echo -e "${BLUE}        https://github.com/settings/tokens/new${NC}"
+    echo ""
+    
+    echo -e "${GREEN}Step 2: 토큰 설정${NC}"
+    echo "   • Note: ${YELLOW}Affinity App CI/CD${NC}"
+    echo "   • Expiration: ${YELLOW}90 days${NC}"
+    echo ""
+    
+    echo -e "${GREEN}Step 3: 권한 선택 (Select scopes)${NC}"
+    echo "   ${YELLOW}☑ repo${NC} (전체 private repos 접근)"
+    echo "     ☑ repo:status"
+    echo "     ☑ repo_deployment"
+    echo "     ☑ public_repo"
+    echo "     ☑ repo:invite"
+    echo "     ☑ security_events"
+    echo "   ${YELLOW}☑ workflow${NC} (GitHub Actions 워크플로우 수정)"
+    echo ""
+    
+    echo -e "${GREEN}Step 4: 페이지 하단의 'Generate token' 클릭${NC}"
+    echo ""
+    
+    echo -e "${GREEN}Step 5: 생성된 토큰 복사 (ghp_로 시작)${NC}"
+    echo -e "${RED}        ⚠️  이 토큰은 다시 볼 수 없으니 반드시 복사하세요!${NC}"
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
     # 브라우저 열기 옵션
     if prompt_confirm "브라우저에서 GitHub Token 페이지를 열까요?" true; then
-        # 다양한 방법으로 브라우저 열기 시도
         if [ -n "$BROWSER" ]; then
             "$BROWSER" "https://github.com/settings/tokens/new" 2>/dev/null &
         elif command -v xdg-open &> /dev/null; then
             xdg-open "https://github.com/settings/tokens/new" 2>/dev/null &
         elif command -v open &> /dev/null; then
             open "https://github.com/settings/tokens/new" 2>/dev/null &
-        elif command -v start &> /dev/null; then
-            start "https://github.com/settings/tokens/new" 2>/dev/null &
         else
             log_warn "브라우저를 자동으로 열 수 없습니다. 위 URL을 직접 방문해주세요."
         fi
-        
-        echo ""
-        log_info "브라우저에서 토큰을 생성한 후 아래에 붙여넣어주세요."
     fi
     
     echo ""
-    echo -e "${CYAN}GitHub Personal Access Token을 입력하세요 (ghp_로 시작):${NC}"
-    echo -e "${YELLOW}⚠️ 입력 시 화면에 표시됩니다. 주변을 확인하세요!${NC}"
+    echo -e "${CYAN}생성된 토큰을 입력하세요 (ghp_...):${NC}"
+    echo -e "${YELLOW}⚠️  입력 시 화면에 표시됩니다. 주변을 확인하세요!${NC}"
     echo -n "> "
     
-    # read -s 대신 일반 read 사용 (Codespaces에서 더 잘 작동)
     read GITHUB_PAT
     
     # 입력 후 화면 정리
@@ -625,39 +669,109 @@ setup_github_pat() {
     log_header "${LOCK} GitHub Personal Access Token 설정"
     
     if [ -z "$GITHUB_PAT" ]; then
-        log_warn "PAT가 입력되지 않았습니다. GitHub Secrets를 수동으로 설정해야 합니다."
+        log_warn "토큰이 입력되지 않았습니다."
         return 1
     fi
     
-    # PAT 형식 확인
+    # 토큰 형식 확인
     if [[ ! "$GITHUB_PAT" =~ ^ghp_ ]]; then
-        log_warn "PAT가 'ghp_'로 시작하지 않습니다. 올바른 토큰인지 확인하세요."
+        log_warn "토큰이 'ghp_'로 시작하지 않습니다. 올바른 형식인지 확인하세요."
     fi
     
-    # PAT 검증
-    log_info "PAT 검증 중..."
-    RESPONSE=$(curl -s -H "Authorization: token $GITHUB_PAT" https://api.github.com/user)
-    
-    if echo "$RESPONSE" | grep -q "\"login\""; then
-        USERNAME=$(echo "$RESPONSE" | jq -r '.login' 2>/dev/null || echo "Unknown")
-        log_success "PAT 검증 성공! GitHub 사용자: $USERNAME"
-        
-        # PAT 저장 옵션
-        if prompt_confirm "이 PAT를 안전하게 저장하시겠습니까? (다음에 재사용 가능)" false; then
-            echo "$GITHUB_PAT" > "$PAT_FILE"
-            chmod 600 "$PAT_FILE"
-            log_success "PAT가 안전하게 저장되었습니다: $PAT_FILE"
-        fi
-        
+    # 토큰 검증
+    if test_github_token "$GITHUB_PAT"; then
         export GITHUB_PAT
         return 0
     else
-        log_error "PAT 검증 실패. 올바른 토큰인지 확인해주세요."
-        echo ""
-        log_info "응답 내용:"
-        echo "$RESPONSE" | head -5
         return 1
     fi
+}
+
+# GitHub Personal Access Token 설정
+setup_github_pat() {
+    log_header "${LOCK} GitHub Personal Access Token 설정"
+    
+    # 1. 환경 변수로 이미 제공된 경우
+    if [ -n "$GITHUB_PAT" ]; then
+        log_success "환경 변수에서 GITHUB_PAT를 찾았습니다."
+        if test_github_token "$GITHUB_PAT"; then
+            return 0
+        else
+            log_warn "제공된 토큰이 유효하지 않습니다. 새 토큰을 설정합니다."
+            unset GITHUB_PAT
+        fi
+    fi
+    
+    # 2. 저장된 토큰 확인
+    PAT_FILE="${HOME}/.github_pat_affinity"
+    if [ -f "$PAT_FILE" ]; then
+        STORED_PAT=$(cat "$PAT_FILE" 2>/dev/null)
+        if [ -n "$STORED_PAT" ]; then
+            log_info "저장된 PAT를 찾았습니다."
+            
+            # 저장된 토큰 검증
+            if test_github_token "$STORED_PAT"; then
+                if prompt_confirm "저장된 PAT를 사용하시겠습니까?" true; then
+                    GITHUB_PAT="$STORED_PAT"
+                    export GITHUB_PAT
+                    return 0
+                fi
+            else
+                log_warn "저장된 토큰이 만료되었거나 유효하지 않습니다."
+                rm -f "$PAT_FILE"
+            fi
+        fi
+    fi
+    
+    # 3. 새 토큰 설정
+    echo ""
+    log_info "GitHub Secrets를 자동으로 설정하려면 Personal Access Token이 필요합니다."
+    echo ""
+    echo -e "${YELLOW}설정 방법을 선택하세요:${NC}"
+    echo "1) GitHub CLI Device Flow 인증 (권장)"
+    echo "2) 수동으로 토큰 생성 및 입력"
+    echo "3) 건너뛰기 (수동으로 Secret 설정)"
+    echo ""
+    
+    read -p "선택 [1-3]: " method
+    
+    case $method in
+        1)
+            if setup_with_device_flow; then
+                # 토큰 저장 옵션
+                if prompt_confirm "이 PAT를 안전하게 저장하시겠습니까? (다음에 재사용 가능)" true; then
+                    echo "$GITHUB_PAT" > "$PAT_FILE"
+                    chmod 600 "$PAT_FILE"
+                    log_success "PAT가 안전하게 저장되었습니다: $PAT_FILE"
+                fi
+                return 0
+            else
+                log_warn "Device Flow 인증 실패. 수동 입력을 시도합니다."
+                manual_token_input
+            fi
+            ;;
+        2)
+            if manual_token_input; then
+                # 토큰 저장 옵션
+                if prompt_confirm "이 PAT를 안전하게 저장하시겠습니까? (다음에 재사용 가능)" true; then
+                    echo "$GITHUB_PAT" > "$PAT_FILE"
+                    chmod 600 "$PAT_FILE"
+                    log_success "PAT가 안전하게 저장되었습니다: $PAT_FILE"
+                fi
+                return 0
+            else
+                return 1
+            fi
+            ;;
+        3)
+            log_warn "PAT 설정을 건너뛰었습니다. GitHub Secrets를 수동으로 설정해야 합니다."
+            return 1
+            ;;
+        *)
+            log_error "잘못된 선택입니다."
+            return 1
+            ;;
+    esac
 }
 
 # GitHub Secrets 자동 설정 (REST API 사용)
