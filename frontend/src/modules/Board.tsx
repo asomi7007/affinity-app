@@ -87,13 +87,17 @@ export const Board: React.FC = () => {
     const currentCenterY = y + NOTE_HEIGHT / 2;
     
     // 모든 다른 포스트잇과 비교하여 스냅 포인트 수집
-    notes.filter(n => n.id !== id).forEach(other => {
+    notes.filter(n => n.id !== id).forEach((other, idx) => {
       const otherLeft = other.x;
       const otherRight = other.x + NOTE_WIDTH;
       const otherCenterX = other.x + NOTE_WIDTH / 2;
       const otherTop = other.y;
       const otherBottom = other.y + NOTE_HEIGHT;
       const otherCenterY = other.y + NOTE_HEIGHT / 2;
+      
+      // 다른 포스트잇 위치 로그
+      if (isDragging) {
+        console.log(`[Other Note ${idx}] x=${other.x}, left=${otherLeft}, right=${otherRight}`);
       
       // ========== X축 스냅 포인트 ==========
       
@@ -208,17 +212,28 @@ export const Board: React.FC = () => {
           type: 'center-y'
         });
       }
+      
+      // 닫는 괄호 추가
+      }
     });
     
     // 가장 가까운 X축 스냅 포인트 적용
     if (xSnapPoints.length > 0) {
       xSnapPoints.sort((a, b) => a.distance - b.distance);
       const closest = xSnapPoints[0];
+      
+      // 상세 디버그 로그
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log(`[Snap X] Type: ${closest.type}`);
+      console.log(`  Current: x=${x}, left=${x}, right=${x + NOTE_WIDTH}`);
+      console.log(`  Target: nx=${closest.targetX}`);
+      console.log(`  Distance: ${closest.distance.toFixed(1)}px`);
+      console.log(`  NOTE_WIDTH: ${NOTE_WIDTH}`);
+      
       nx = closest.targetX;  // ✅ 계산된 최종 X 좌표 사용
       snappedX = closest.guideLine;
       
-      // 디버그 로그
-      console.log(`[Snap X] ${closest.type}: x=${x} → nx=${nx} (distance: ${closest.distance.toFixed(1)}px)`);
+      console.log(`  Result: nx=${nx}, new right=${nx + NOTE_WIDTH}`);
     }
     
     // 가장 가까운 Y축 스냅 포인트 적용
