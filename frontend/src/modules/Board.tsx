@@ -25,21 +25,21 @@ export const Board: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [snapGuides, setSnapGuides] = useState<{ x?: number; y?: number }>({});
   const boardRef = useRef<HTMLDivElement | null>(null);
-  const { send } = useWebSocket(`/ws/board/${boardId}`, (msg: EventMessage) => {
-    switch (msg.type) {
-      case 'note.add':
-        setNotes(prev => prev.find(p=>p.id===msg.note.id)? prev : [...prev, msg.note]);
-        break;
-      case 'note.move':
-        setNotes(prev => prev.map(n => n.id === msg.note.id ? { ...n, x: msg.note.x, y: msg.note.y } : n));
-        break;
-      case 'note.update':
-        setNotes(prev => prev.map(n => n.id === msg.note.id ? { ...n, text: msg.note.text } : n));
-        break;
+  const { send } = useWebSocket(`/ws/board/${boardId}`, {
+    onMessage: (msg: EventMessage) => {
+      switch (msg.type) {
+        case 'note.add':
+          setNotes(prev => prev.find(p=>p.id===msg.note.id)? prev : [...prev, msg.note]);
+          break;
+        case 'note.move':
+          setNotes(prev => prev.map(n => n.id === msg.note.id ? { ...n, x: msg.note.x, y: msg.note.y } : n));
+          break;
+        case 'note.update':
+          setNotes(prev => prev.map(n => n.id === msg.note.id ? { ...n, text: msg.note.text } : n));
+          break;
+      }
     }
-  });
-
-  const createNoteWithColor = (color: string) => {
+  });  const createNoteWithColor = (color: string) => {
     // 중앙 근처 위치 계산
     const rect = boardRef.current?.getBoundingClientRect();
     const centerX = rect ? rect.width/2 - 80 : 300;
