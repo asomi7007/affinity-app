@@ -66,22 +66,23 @@ export const Board: React.FC = () => {
     let ny = y;
     let snappedX: number | undefined;
     let snappedY: number | undefined;
+    let xSnapped = false;
+    let ySnapped = false;
     
-    const currentLeft = x;
-    const currentRight = x + NOTE_WIDTH;
-    const currentTop = y;
-    const currentBottom = y + NOTE_HEIGHT;
-    
-    // 다른 포스트잇들과 비교하여 스냅
+    // 다른 포스트잇들과 비교하여 스냅 (첫 번째로 매칭되는 것만 적용)
     notes.filter(n => n.id !== id).forEach(other => {
       const otherLeft = other.x;
       const otherRight = other.x + NOTE_WIDTH;
       const otherTop = other.y;
       const otherBottom = other.y + NOTE_HEIGHT;
       
-      // X축 정렬 (수직 방향 - 좌우 정렬)
-      let xSnapped = false;
+      // 현재 위치 기준 계산 (nx, ny 사용)
+      const currentLeft = nx;
+      const currentRight = nx + NOTE_WIDTH;
+      const currentTop = ny;
+      const currentBottom = ny + NOTE_HEIGHT;
       
+      // X축 정렬 (수직 방향 - 좌우 정렬)
       // 왼쪽 가장자리 정렬
       if (!xSnapped && Math.abs(currentLeft - otherLeft) < SNAP_THRESHOLD) {
         nx = otherLeft;
@@ -89,33 +90,31 @@ export const Board: React.FC = () => {
         xSnapped = true;
       }
       // 오른쪽 가장자리 정렬
-      if (!xSnapped && Math.abs(currentRight - otherRight) < SNAP_THRESHOLD) {
+      else if (!xSnapped && Math.abs(currentRight - otherRight) < SNAP_THRESHOLD) {
         nx = otherRight - NOTE_WIDTH;
         snappedX = otherRight;
         xSnapped = true;
       }
       // 왼쪽이 다른 것의 오른쪽에 붙기
-      if (!xSnapped && Math.abs(currentLeft - otherRight) < SNAP_THRESHOLD) {
+      else if (!xSnapped && Math.abs(currentLeft - otherRight) < SNAP_THRESHOLD) {
         nx = otherRight;
         snappedX = otherRight;
         xSnapped = true;
       }
       // 오른쪽이 다른 것의 왼쪽에 붙기
-      if (!xSnapped && Math.abs(currentRight - otherLeft) < SNAP_THRESHOLD) {
+      else if (!xSnapped && Math.abs(currentRight - otherLeft) < SNAP_THRESHOLD) {
         nx = otherLeft - NOTE_WIDTH;
         snappedX = otherLeft;
         xSnapped = true;
       }
       // 수직 중앙선 정렬
-      if (!xSnapped && Math.abs((x + NOTE_WIDTH / 2) - (other.x + NOTE_WIDTH / 2)) < SNAP_THRESHOLD) {
+      else if (!xSnapped && Math.abs((currentLeft + NOTE_WIDTH / 2) - (other.x + NOTE_WIDTH / 2)) < SNAP_THRESHOLD) {
         nx = other.x + NOTE_WIDTH / 2 - NOTE_WIDTH / 2;
         snappedX = other.x + NOTE_WIDTH / 2;
         xSnapped = true;
       }
       
       // Y축 정렬 (수평 방향 - 상하 정렬)
-      let ySnapped = false;
-      
       // 위쪽 가장자리 정렬
       if (!ySnapped && Math.abs(currentTop - otherTop) < SNAP_THRESHOLD) {
         ny = otherTop;
@@ -123,25 +122,25 @@ export const Board: React.FC = () => {
         ySnapped = true;
       }
       // 아래쪽 가장자리 정렬
-      if (!ySnapped && Math.abs(currentBottom - otherBottom) < SNAP_THRESHOLD) {
+      else if (!ySnapped && Math.abs(currentBottom - otherBottom) < SNAP_THRESHOLD) {
         ny = otherBottom - NOTE_HEIGHT;
         snappedY = otherBottom;
         ySnapped = true;
       }
       // 위쪽이 다른 것의 아래쪽에 붙기
-      if (!ySnapped && Math.abs(currentTop - otherBottom) < SNAP_THRESHOLD) {
+      else if (!ySnapped && Math.abs(currentTop - otherBottom) < SNAP_THRESHOLD) {
         ny = otherBottom;
         snappedY = otherBottom;
         ySnapped = true;
       }
       // 아래쪽이 다른 것의 위쪽에 붙기
-      if (!ySnapped && Math.abs(currentBottom - otherTop) < SNAP_THRESHOLD) {
+      else if (!ySnapped && Math.abs(currentBottom - otherTop) < SNAP_THRESHOLD) {
         ny = otherTop - NOTE_HEIGHT;
         snappedY = otherTop;
         ySnapped = true;
       }
       // 수평 중앙선 정렬
-      if (!ySnapped && Math.abs((y + NOTE_HEIGHT / 2) - (other.y + NOTE_HEIGHT / 2)) < SNAP_THRESHOLD) {
+      else if (!ySnapped && Math.abs((currentTop + NOTE_HEIGHT / 2) - (other.y + NOTE_HEIGHT / 2)) < SNAP_THRESHOLD) {
         ny = other.y + NOTE_HEIGHT / 2 - NOTE_HEIGHT / 2;
         snappedY = other.y + NOTE_HEIGHT / 2;
         ySnapped = true;
