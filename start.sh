@@ -96,6 +96,12 @@ trap cleanup SIGINT SIGTERM
 print_success "환경 설정 완료!"
 echo ""
 
+# Codespaces 환경에서 포트를 Public으로 설정
+if [ -n "$CODESPACE_NAME" ]; then
+    print_step "GitHub Codespaces 환경 감지: 포트 8000을 Public으로 설정 중..."
+    python3 scripts/set-port-public.py 8000 || true
+fi
+
 # 백엔드 실행
 print_step "FastAPI 백엔드 서버 시작 중... (포트 8000)"
 cd backend

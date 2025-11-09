@@ -1,0 +1,14 @@
+{
+  "remote.portsAttributes": {
+    "8000": {
+      "label": "Backend API",
+      "onAutoForward": "notify",
+      "visibility": "public"
+    },
+    "5173": {
+      "label": "Frontend Dev Server",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    }
+  }
+}
