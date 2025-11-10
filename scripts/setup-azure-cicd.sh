@@ -573,100 +573,183 @@ test_github_token() {
     fi
 }
 
-# GitHub Device Flow 인증
+# GitHub Device Flow 인증 (Codespaces 우회)
 setup_with_device_flow() {
-    log_info "GitHub CLI를 통한 Device Flow 인증을 시작합니다..."
+    log_info "GitHub Device Flow 인증 시작..."
     echo ""
     
-    # gh CLI 설치 확인
-    if ! command -v gh &> /dev/null; then
-        log_warn "GitHub CLI가 설치되어 있지 않습니다."
+    # jq 필수 확인
+    if ! command -v jq &> /dev/null; then
+        log_info "jq 설치 중..."
+        sudo apt-get update -qq && sudo apt-get install -y jq -qq &> /dev/null
+    fi
+    
+    # OAuth App Client ID (GitHub CLI 공개 ID)
+    local CLIENT_ID="178c6fc778ccc68e1d6a"
+    
+    # Device code 요청
+    log_info "Device Code 요청 중..."
+    local response=$(curl -sX POST \
+        -H "Accept: application/json" \
+        -H "Content-Type: application/json" \
+        -d "{\"client_id\":\"$CLIENT_ID\",\"scope\":\"repo workflow\"}" \
+        https://github.com/login/device/code)
+    
+    local device_code=$(echo "$response" | jq -r '.device_code' 2>/dev/null)
+    local user_code=$(echo "$response" | jq -r '.user_code' 2>/dev/null)
+    local verification_uri=$(echo "$response" | jq -r '.verification_uri' 2>/dev/null)
+    local interval=$(echo "$response" | jq -r '.interval' 2>/dev/null)
+    
+    if [ -z "$device_code" ] || [ "$device_code" == "null" ]; then
+        log_error "Device Flow 시작 실패"
+        echo "$response" | jq '.' 2>/dev/null || echo "$response"
         return 1
     fi
     
-    # gh auth login with device flow
-    gh auth login --web --scopes "repo,workflow"
+    echo ""
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}${YELLOW}${KEY} 브라우저에서 인증이 필요합니다${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${CYAN}Step 1: 새 브라우저 탭에서 아래 URL 열기${NC}"
+    echo -e "   ${BLUE}${verification_uri}${NC}"
+    echo ""
+    echo -e "${CYAN}Step 2: 이 코드를 입력${NC}"
+    echo -e "   ${BOLD}${YELLOW}${user_code}${NC}"
+    echo ""
+    echo -e "${CYAN}Step 3: GitHub 계정으로 로그인 및 승인${NC}"
+    echo ""
     
-    if [ $? -eq 0 ]; then
-        log_success "GitHub CLI 인증 완료"
+    if [ -n "$CODESPACES" ]; then
+        echo -e "${YELLOW}💡 Ctrl+Click 또는 Cmd+Click으로 링크를 열어주세요${NC}"
+    fi
+    
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${CYAN}승인 대기 중... (최대 5분)${NC}"
+    
+    # 폴링하여 토큰 획득
+    local poll_interval=${interval:-5}
+    local max_attempts=60
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        sleep $poll_interval
         
-        # 토큰 추출
-        GITHUB_PAT=$(gh auth token 2>/dev/null)
+        local token_response=$(curl -sX POST \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -d "{\"client_id\":\"$CLIENT_ID\",\"device_code\":\"$device_code\",\"grant_type\":\"urn:ietf:params:oauth:grant-type:device_code\"}" \
+            https://github.com/login/oauth/access_token)
         
-        if [ -n "$GITHUB_PAT" ]; then
-            log_success "토큰 획득 성공"
+        local access_token=$(echo "$token_response" | jq -r '.access_token' 2>/dev/null)
+        local error=$(echo "$token_response" | jq -r '.error' 2>/dev/null)
+        
+        if [ -n "$access_token" ] && [ "$access_token" != "null" ]; then
+            echo ""
+            log_success "토큰 획득 성공!"
+            
+            GITHUB_PAT="$access_token"
             export GITHUB_PAT
+            
+            # 기존 제한된 토큰 백업
+            if [ -n "$GITHUB_TOKEN" ] && [ "$GITHUB_TOKEN" != "$GITHUB_PAT" ]; then
+                export OLD_GITHUB_TOKEN="$GITHUB_TOKEN"
+            fi
+            
+            # 새 토큰으로 GITHUB_TOKEN 덮어쓰기
+            export GITHUB_TOKEN="$GITHUB_PAT"
+            export GH_TOKEN="$GITHUB_PAT"
+            
+            # Git credential 설정
+            git config --global credential.helper store
+            echo "https://${GITHUB_PAT}@github.com" > ~/.git-credentials
+            chmod 600 ~/.git-credentials
+            
             return 0
+        elif [ "$error" == "authorization_pending" ]; then
+            echo -n "."
+            ((attempt++))
+        elif [ "$error" == "slow_down" ]; then
+            poll_interval=$((poll_interval + 5))
+            echo -n "⏳"
+            ((attempt++))
+        elif [ "$error" == "expired_token" ]; then
+            echo ""
+            log_error "토큰이 만료되었습니다. 다시 시도해주세요."
+            return 1
+        elif [ "$error" == "access_denied" ]; then
+            echo ""
+            log_error "사용자가 인증을 거부했습니다."
+            return 1
         else
-            log_error "토큰 획득 실패"
+            echo ""
+            log_error "인증 실패: $error"
             return 1
         fi
-    else
-        log_error "인증 실패"
-        return 1
-    fi
+    done
+    
+    echo ""
+    log_error "시간 초과. 5분 안에 인증을 완료해주세요."
+    return 1
 }
 
 # 수동 토큰 입력
 manual_token_input() {
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BOLD}${YELLOW}GitHub Personal Access Token 생성 가이드${NC}"
+    echo -e "${BOLD}${YELLOW}${KEY} GitHub Personal Access Token 생성 가이드${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
-    echo -e "${GREEN}Step 1: 새 브라우저 탭에서 GitHub 설정 페이지를 엽니다${NC}"
-    echo -e "        아래 URL을 Ctrl+Click하여 열기:"
-    echo -e "${BLUE}        https://github.com/settings/tokens/new${NC}"
+    # 자동 파라미터가 포함된 URL 생성
+    local token_url="https://github.com/settings/tokens/new?description=Affinity%20App%20CI%2FCD&scopes=repo,workflow"
+    
+    echo -e "${GREEN}Step 1: GitHub Token 생성 페이지 열기${NC}"
+    echo -e "   ${BLUE}${token_url}${NC}"
     echo ""
     
-    echo -e "${GREEN}Step 2: 토큰 설정${NC}"
-    echo "   • Note: ${YELLOW}Affinity App CI/CD${NC}"
-    echo "   • Expiration: ${YELLOW}90 days${NC}"
-    echo ""
-    
-    echo -e "${GREEN}Step 3: 권한 선택 (Select scopes)${NC}"
-    echo "   ${YELLOW}☑ repo${NC} (전체 private repos 접근)"
-    echo "     ☑ repo:status"
-    echo "     ☑ repo_deployment"
-    echo "     ☑ public_repo"
-    echo "     ☑ repo:invite"
-    echo "     ☑ security_events"
-    echo "   ${YELLOW}☑ workflow${NC} (GitHub Actions 워크플로우 수정)"
-    echo ""
-    
-    echo -e "${GREEN}Step 4: 페이지 하단의 'Generate token' 클릭${NC}"
-    echo ""
-    
-    echo -e "${GREEN}Step 5: 생성된 토큰 복사 (ghp_로 시작)${NC}"
-    echo -e "${RED}        ⚠️  이 토큰은 다시 볼 수 없으니 반드시 복사하세요!${NC}"
-    echo ""
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    
-    # 브라우저 열기 옵션
-    if prompt_confirm "브라우저에서 GitHub Token 페이지를 열까요?" true; then
-        if [ -n "$BROWSER" ]; then
-            "$BROWSER" "https://github.com/settings/tokens/new" 2>/dev/null &
-        elif command -v xdg-open &> /dev/null; then
-            xdg-open "https://github.com/settings/tokens/new" 2>/dev/null &
-        elif command -v open &> /dev/null; then
-            open "https://github.com/settings/tokens/new" 2>/dev/null &
-        else
-            log_warn "브라우저를 자동으로 열 수 없습니다. 위 URL을 직접 방문해주세요."
+    if [ -n "$CODESPACES" ]; then
+        echo -e "${YELLOW}💡 Ctrl+Click 또는 Cmd+Click으로 위 링크를 새 탭에서 열어주세요${NC}"
+    else
+        # 브라우저 자동 열기 시도
+        if prompt_confirm "브라우저에서 GitHub Token 페이지를 열까요?" true; then
+            if [ -n "$BROWSER" ]; then
+                "$BROWSER" "$token_url" 2>/dev/null &
+            elif command -v xdg-open &> /dev/null; then
+                xdg-open "$token_url" 2>/dev/null &
+            elif command -v open &> /dev/null; then
+                open "$token_url" 2>/dev/null &
+            else
+                log_warn "브라우저를 자동으로 열 수 없습니다."
+            fi
         fi
     fi
     
     echo ""
-    echo -e "${CYAN}생성된 토큰을 입력하세요 (ghp_...):${NC}"
-    echo -e "${YELLOW}⚠️  입력 시 화면에 표시됩니다. 주변을 확인하세요!${NC}"
+    echo -e "${GREEN}Step 2: 토큰 설정 확인${NC}"
+    echo "   • Note: ${YELLOW}Affinity App CI/CD${NC} ${CYAN}(자동 입력됨)${NC}"
+    echo "   • Expiration: ${YELLOW}90 days${NC}"
+    echo "   • Scopes: ${YELLOW}repo, workflow${NC} ${CYAN}(자동 선택됨)${NC}"
+    echo ""
+    
+    echo -e "${GREEN}Step 3: 페이지 하단의 'Generate token' 클릭${NC}"
+    echo ""
+    
+    echo -e "${GREEN}Step 4: 생성된 토큰 복사 (ghp_로 시작)${NC}"
+    echo -e "${RED}   ⚠️  이 토큰은 한 번만 표시됩니다. 반드시 복사하세요!${NC}"
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    echo -e "${BOLD}생성된 토큰을 입력하세요 (ghp_로 시작):${NC}"
+    echo -e "${YELLOW}💡 복사 후 마우스 우클릭으로 붙여넣기${NC}"
     echo -n "> "
     
-    read GITHUB_PAT
-    
-    # 입력 후 화면 정리
-    clear
-    log_header "${LOCK} GitHub Personal Access Token 설정"
+    # 토큰 입력 (표시되지 않음)
+    read -s GITHUB_PAT
+    echo ""
+    echo ""
     
     if [ -z "$GITHUB_PAT" ]; then
         log_warn "토큰이 입력되지 않았습니다."
@@ -674,13 +757,30 @@ manual_token_input() {
     fi
     
     # 토큰 형식 확인
-    if [[ ! "$GITHUB_PAT" =~ ^ghp_ ]]; then
-        log_warn "토큰이 'ghp_'로 시작하지 않습니다. 올바른 형식인지 확인하세요."
+    if [[ ! "$GITHUB_PAT" =~ ^gh[ps]_ ]]; then
+        log_warn "표준 GitHub 토큰 형식이 아니지만 계속 진행합니다..."
     fi
     
     # 토큰 검증
     if test_github_token "$GITHUB_PAT"; then
         export GITHUB_PAT
+        
+        # 기존 제한된 토큰 백업
+        if [ -n "$GITHUB_TOKEN" ] && [ "$GITHUB_TOKEN" != "$GITHUB_PAT" ]; then
+            export OLD_GITHUB_TOKEN="$GITHUB_TOKEN"
+        fi
+        
+        # 새 토큰으로 환경변수 설정
+        export GITHUB_TOKEN="$GITHUB_PAT"
+        export GH_TOKEN="$GITHUB_PAT"
+        
+        # Git credential 설정
+        git config --global credential.helper store
+        echo "https://${GITHUB_PAT}@github.com" > ~/.git-credentials
+        chmod 600 ~/.git-credentials
+        
+        log_success "Git credentials 설정 완료"
+        
         return 0
     else
         return 1
