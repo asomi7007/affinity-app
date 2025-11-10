@@ -183,13 +183,20 @@ jobs:
       if: steps.check-app.outputs.exists == 'true'
       run: |
         echo "♻️ Updating existing Container App..."
+        
+        # 레지스트리 인증 정보 업데이트 (필요한 경우)
+        az containerapp registry set \
+          --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
+          --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+          --server ${{ env.REGISTRY }} \
+          --username ${{ github.actor }} \
+          --password ${{ secrets.GITHUB_TOKEN }} || echo "Registry already configured"
+        
+        # 이미지 업데이트
         az containerapp update \
           --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
           --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-          --registry-server ${{ env.REGISTRY }} \
-          --registry-username ${{ github.actor }} \
-          --registry-password ${{ secrets.GITHUB_TOKEN }}
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
     
     - name: Get Application URL
       id: get-url
