@@ -1,5 +1,8 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
 from app.ws.manager import connection_manager
 from app.api import boards
 
@@ -13,10 +16,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# API 라우터 먼저 등록
 app.include_router(boards.router, prefix="/api/boards", tags=["boards"])
 
-@app.get("/")
-async def root():
+@app.get("/api")
+async def api_root():
     return {
         "message": "Affinity Diagram API",
         "version": "0.1.0",
@@ -28,6 +32,24 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+# 정적 파일 경로 설정
+FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
+
+# 정적 파일 서빙 (assets, JS, CSS 등)
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
+    
+    # SPA를 위한 catch-all 라우트 (맨 마지막에 등록)
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # API 경로는 이미 위에서 처리됨
+        # 파일이 존재하면 반환
+        file_path = FRONTEND_DIST / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        # 그 외는 index.html 반환 (SPA routing)
+        return FileResponse(FRONTEND_DIST / "index.html")
 # In-memory realtime board state (simple volatile store)
 class BoardRealtimeState:
     def __init__(self):
